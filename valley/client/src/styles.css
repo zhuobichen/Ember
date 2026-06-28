@@ -1,0 +1,340 @@
+/**
+ * 全局样式 - 纪念碑谷平台
+ * 深色主题，与纪念碑生成器风格一致
+ */
+
+:root {
+  --bg: #0a0a0f;
+  --bg2: #15151f;
+  --bg3: #1e1e2e;
+  --ink: #e8e4d8;
+  --muted: #8a8580;
+  --rule: #2a2a3a;
+  --accent: #d4a574;
+  --accent2: #5fb8a8;
+  --accent-dim: rgba(212,165,116,0.15);
+  --glow: rgba(212,165,116,0.1);
+  --danger: #c75c5c;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'Georgia', 'Noto Serif SC', 'Songti SC', serif;
+  line-height: 1.8;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: radial-gradient(ellipse at 50% 0%, var(--glow) 0%, transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+#root { position: relative; z-index: 1; }
+
+a { color: var(--accent2); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+button {
+  cursor: pointer;
+  font-family: inherit;
+  border: none;
+  border-radius: 4px;
+  padding: 0.6rem 1.5rem;
+  font-size: 0.9rem;
+  transition: all 0.3s;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+}
+.btn-primary:hover { background: var(--accent2); }
+
+.btn-outline {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+.btn-outline:hover { background: var(--accent); color: var(--bg); }
+
+.btn-danger {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+}
+.btn-danger:hover { background: var(--danger); color: var(--bg); }
+
+input, textarea {
+  font-family: inherit;
+  background: var(--bg2);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.9rem;
+  width: 100%;
+  outline: none;
+  transition: border-color 0.3s;
+}
+input:focus, textarea:focus { border-color: var(--accent); }
+
+/* 导航栏 */
+.navbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 2rem;
+  border-bottom: 1px solid var(--rule);
+  background: var(--bg);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.navbar-brand {
+  font-size: 1.2rem;
+  color: var(--accent);
+  font-style: italic;
+}
+
+.navbar-links {
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+}
+
+.navbar-links a, .navbar-links button {
+  color: var(--muted);
+  font-size: 0.85rem;
+  background: none;
+  padding: 0;
+}
+.navbar-links a:hover { color: var(--accent); }
+
+/* 容器 */
+.container {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+/* 卡片 */
+.card {
+  background: var(--bg2);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 1.5rem;
+  transition: border-color 0.3s, transform 0.3s, box-shadow 0.3s;
+}
+.card:hover {
+  border-color: var(--accent-dim);
+  transform: translateY(-3px);
+  box-shadow: 0 8px 30px rgba(0,0,0,0.3);
+}
+
+/* 纪念碑卡片网格 */
+.monument-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1.5rem;
+}
+
+.monument-card {
+  background: var(--bg2);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 1.5rem;
+  cursor: pointer;
+  transition: all 0.3s;
+  position: relative;
+  overflow: hidden;
+}
+.monument-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+.monument-card:hover {
+  border-color: var(--accent-dim);
+  transform: translateY(-4px);
+  box-shadow: 0 10px 35px rgba(0,0,0,0.4);
+}
+.monument-card:hover::before { opacity: 1; }
+
+.monument-card .mc-title {
+  font-size: 1.1rem;
+  color: var(--ink);
+  margin-bottom: 0.5rem;
+}
+.monument-card .mc-subtitle {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 1rem;
+}
+.monument-card .mc-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-family: monospace;
+}
+.monument-card .mc-lock {
+  color: var(--accent);
+  font-size: 0.8rem;
+}
+
+/* 表单 */
+.form-group {
+  margin-bottom: 1.25rem;
+}
+.form-group label {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 0.4rem;
+}
+
+/* 页面标题 */
+.page-title {
+  font-size: 1.8rem;
+  color: var(--ink);
+  margin-bottom: 0.5rem;
+}
+.page-subtitle {
+  color: var(--muted);
+  margin-bottom: 2rem;
+  font-size: 0.95rem;
+}
+
+/* 纪念碑详情 */
+.monument-detail {
+  max-width: 720px;
+  margin: 0 auto;
+}
+.monument-detail h1 {
+  font-size: 2rem;
+  color: var(--ink);
+  text-align: center;
+  margin-bottom: 0.5rem;
+}
+.monument-detail .epitaph {
+  background: var(--bg2);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+  padding: 2rem;
+  margin: 2rem 0;
+  white-space: pre-wrap;
+  font-size: 1.05rem;
+  line-height: 2.1;
+  color: var(--ink);
+}
+
+/* 谜题解锁 */
+.puzzle-box {
+  text-align: center;
+  padding: 3rem 2rem;
+  background: var(--bg2);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  margin: 2rem 0;
+}
+.puzzle-box .puzzle-icon {
+  font-size: 2rem;
+  color: var(--accent);
+  margin-bottom: 1rem;
+}
+.puzzle-box .puzzle-question {
+  font-size: 1.1rem;
+  color: var(--ink);
+  margin-bottom: 1.5rem;
+}
+
+/* 评论 */
+.comment-item {
+  background: var(--bg2);
+  border-radius: 6px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--rule);
+}
+.comment-item .comment-author {
+  font-size: 0.8rem;
+  color: var(--accent2);
+  margin-bottom: 0.3rem;
+  font-family: monospace;
+}
+.comment-item .comment-content {
+  font-size: 0.9rem;
+  color: var(--ink);
+}
+.comment-item .comment-time {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 0.3rem;
+}
+
+/* 漂流瓶 */
+.bottle-item {
+  background: var(--bg2);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 0.75rem;
+  position: relative;
+}
+.bottle-item::before {
+  content: '~';
+  color: var(--accent2);
+  margin-right: 0.5rem;
+}
+
+/* 提示消息 */
+.alert {
+  padding: 0.75rem 1rem;
+  border-radius: 4px;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+.alert-error {
+  background: rgba(199,92,92,0.15);
+  color: var(--danger);
+  border: 1px solid rgba(199,92,92,0.3);
+}
+.alert-success {
+  background: rgba(95,184,168,0.15);
+  color: var(--accent2);
+  border: 1px solid rgba(95,184,168,0.3);
+}
+
+/* 空状态 */
+.empty-state {
+  text-align: center;
+  padding: 4rem 2rem;
+  color: var(--muted);
+}
+.empty-state .empty-icon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+  opacity: 0.3;
+}
+
+/* 响应式 */
+@media (max-width: 600px) {
+  .container { padding: 1rem; }
+  .monument-grid { grid-template-columns: 1fr; }
+  .navbar { padding: 0.75rem 1rem; }
+  .navbar-brand { font-size: 1rem; }
+}

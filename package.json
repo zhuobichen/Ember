@@ -1,0 +1,45 @@
+{
+  "name": "ember",
+  "version": "0.1.0",
+  "description": "余烬 — 从聊天记录生成一个人的纪念碑，然后用火烧掉原始数据",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "ember": "src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "generate": "node src/index.js generate",
+    "export": "node src/index.js export",
+    "burn": "node src/index.js burn",
+    "status": "node src/index.js status",
+    "valley:server": "node valley/server/index.js",
+    "valley:client": "cd valley/client && npm run dev",
+    "valley:build": "cd valley/client && npm run build",
+    "test": "node src/index.js generate --celebrity su-shi --no-burn"
+  },
+  "dependencies": {
+    "commander": "^12.0.0",
+    "dotenv": "^16.3.0",
+    "lz4": "^0.6.5"
+  },
+  "keywords": [
+    "ember",
+    "monument",
+    "memorial",
+    "wechat",
+    "ai",
+    "deepseek",
+    "digital-legacy",
+    "data-burning"
+  ],
+  "author": "LizhuoChen",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhuobichen/Ember.git"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

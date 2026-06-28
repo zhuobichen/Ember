@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Output & temporary files
+output/
+*/dist/
+temp/
+*.tmp
+*.log
+
+# WeChat decrypted databases
+*.decrypted.db
+*.test.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Build artifacts
+valley/client/dist/
+valley/server/*.db
+valley/server/*.db-shm
+valley/server/*.db-wal
+valley/server/data/
+
+# Internal docs
+报名帖内容.md
+项目完成总结.md
+
+# Test data (personal chat records)
+*.json
+!package.json
+!tsconfig.json
+!vite.config.*
+!eslint.config.*
