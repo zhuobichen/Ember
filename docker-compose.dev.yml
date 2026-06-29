@@ -1,0 +1,45 @@
+services:
+  valley-server:
+    build:
+      context: .
+      target: deps
+    container_name: ember-valley-dev
+    working_dir: /app/valley/server
+    command: ["node", "--watch", "index.js"]
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=development
+      - PORT=3001
+      - VALLEY_DB_PATH=/app/data/valley.db
+      - JWT_SECRET=${JWT_SECRET:-dev_secret_change_me}
+      - AI_PROVIDER=${AI_PROVIDER:-deepseek}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
+    volumes:
+      - ./src:/app/src:ro
+      - ./valley/server:/app/valley/server:ro
+      - ./valley/client/dist:/app/valley/client/dist:ro
+      - ./package.json:/app/package.json:ro
+      - valley-dev-data:/app/data
+    restart: unless-stopped
+
+  valley-client:
+    image: node:22-alpine
+    container_name: ember-valley-client-dev
+    working_dir: /app
+    command: ["npm", "run", "dev", "--", "--host"]
+    ports:
+      - "5174:5174"
+    environment:
+      - NODE_ENV=development
+    volumes:
+      - ./valley/client:/app:cached
+      - /app/node_modules
+    depends_on:
+      - valley-server
+    restart: unless-stopped
+
+volumes:
+  valley-dev-data:
+    name: ember-valley-dev-data

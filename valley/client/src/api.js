@@ -36,18 +36,38 @@ async function request(path, options = {}) {
 
 export const api = {
   // 用户
-  register: (password) => request('/users/register', {
+  register: (password, alias) => request('/users/register', {
     method: 'POST',
-    body: JSON.stringify({ password })
+    body: JSON.stringify({ password, alias })
   }),
   login: (alias, password) => request('/users/login', {
     method: 'POST',
     body: JSON.stringify({ alias, password })
   }),
+  getMe: () => request('/users/me'),
+  updateAlias: (alias) => request('/users/me/alias', {
+    method: 'PUT',
+    body: JSON.stringify({ alias })
+  }),
+  updatePassword: (oldPassword, newPassword) => request('/users/me/password', {
+    method: 'PUT',
+    body: JSON.stringify({ oldPassword, newPassword })
+  }),
 
   // 纪念碑
-  getMonuments: (page = 1) => request(`/monuments?page=${page}`),
+  getMonuments: (params = {}) => {
+    const { page = 1, search = '', sort = 'latest', hasPuzzle = '' } = params;
+    const query = new URLSearchParams();
+    query.set('page', page);
+    if (search) query.set('search', search);
+    if (sort) query.set('sort', sort);
+    if (hasPuzzle !== '') query.set('has_puzzle', hasPuzzle);
+    return request(`/monuments?${query.toString()}`);
+  },
+  getMonumentStats: () => request('/monuments/stats/summary'),
+  getFeaturedMonuments: (limit = 6) => request(`/monuments/featured/list?limit=${limit}`),
   getMonument: (id, answer) => request(`/monuments/${id}${answer ? `?answer=${encodeURIComponent(answer)}` : ''}`),
+  shareMonument: (id) => request(`/monuments/${id}/share`, { method: 'POST' }),
   uploadMonument: async (formData) => {
     const token = getToken();
     const res = await fetch(`${API_BASE}/monuments`, {
@@ -81,6 +101,10 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({ message })
   }),
+
+  // 点赞
+  getLikeStatus: (monumentId) => request(`/monuments/${monumentId}/like`),
+  toggleLike: (monumentId) => request(`/monuments/${monumentId}/like`, { method: 'POST' }),
 
   // 工具
   getToken, setToken, clearToken

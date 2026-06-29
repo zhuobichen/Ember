@@ -208,6 +208,96 @@ npm run valley:build
 - 访客留言（漂流瓶）
 - 别名系统（每人可设置个性化 URL 别名）
 
+### Docker 部署
+
+#### 环境变量配置
+
+```bash
+cp .env.example .env
+```
+
+编辑 `.env` 文件，至少配置以下变量：
+
+| 变量 | 说明 | 必填 |
+|------|------|------|
+| `JWT_SECRET` | JWT 签名密钥，生产环境必须修改 | 是 |
+| `DEEPSEEK_API_KEY` | DeepSeek API Key | 否 |
+| `DEEPSEEK_BASE_URL` | DeepSeek API 地址 | 否 |
+
+生成随机 JWT 密钥：
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+#### Docker Compose 部署（推荐）
+
+```bash
+# 一键启动
+docker compose up -d --build
+
+# 查看日志
+docker compose logs -f valley-server
+
+# 停止服务
+docker compose down
+
+# 重启服务
+docker compose restart
+```
+
+服务启动后访问：http://localhost:3001
+
+#### Docker 单独部署
+
+```bash
+# 构建镜像
+docker build -t ember-valley .
+
+# 运行容器
+docker run -d \
+  --name ember-valley \
+  -p 3001:3001 \
+  -v ember-valley-data:/app/data \
+  -e JWT_SECRET=your_secret_here \
+  -e DEEPSEEK_API_KEY=sk-your-key \
+  --restart unless-stopped \
+  ember-valley
+```
+
+#### Docker Compose 开发模式
+
+```bash
+# 启动开发环境（后端热重载 + 前端 Vite）
+docker compose -f docker-compose.dev.yml up
+
+# 只启动后端开发服务
+docker compose -f docker-compose.dev.yml up valley-server
+```
+
+前端开发服务器地址：http://localhost:5174
+后端 API 地址：http://localhost:3001
+
+### 部署脚本
+
+#### 启动服务脚本
+
+```bash
+chmod +x scripts/start-valley.sh
+./scripts/start-valley.sh
+```
+
+#### 数据库备份脚本
+
+```bash
+chmod +x scripts/backup-db.sh
+./scripts/backup-db.sh
+```
+
+备份文件保存在 `backups/` 目录，自动保留最近 10 个备份。
+
+数据存储在 Docker 卷 `ember-valley-data` 中，对应容器内路径 `/app/data/valley.db`。
+
 ## 名人数据集
 
 内置多维度数据集，无需个人聊天数据即可体验完整流程：
@@ -281,9 +371,16 @@ Ember/
 ├── valley/                   # 纪念碑谷平台
 │   ├── server/               # Express + SQLite 后端
 │   └── client/               # React 前端
+├── scripts/
+│   ├── start-valley.sh       # 一键启动服务脚本
+│   └── backup-db.sh          # 数据库备份脚本
 ├── proposal/                 # 参赛提案展示页
 ├── assets/
 │   └── logo.png              # 项目图标
+├── Dockerfile                # 多阶段构建 Docker 镜像
+├── docker-compose.yml        # 生产环境编排
+├── docker-compose.dev.yml    # 开发环境编排
+├── .dockerignore             # Docker 构建忽略文件
 ├── .env.example              # 环境变量模板
 └── package.json
 ```

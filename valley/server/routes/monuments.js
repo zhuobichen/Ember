@@ -19,23 +19,55 @@ const upload = multer({
 /**
  * GET /api/monuments
  * 浏览纪念碑列表（公开，不显示作者信息）
+ * 支持搜索、排序、筛选
  */
 router.get('/', (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 12;
   const offset = (page - 1) * limit;
+  const search = req.query.search || '';
+  const sort = req.query.sort || 'latest';
+  const hasPuzzle = req.query.has_puzzle;
+
+  let whereClause = 'WHERE is_public = 1';
+  const params = [];
+
+  if (search) {
+    whereClause += ' AND (title LIKE ? OR subtitle LIKE ?)';
+    params.push(`%${search}%`, `%${search}%`);
+  }
+
+  if (hasPuzzle !== undefined) {
+    if (hasPuzzle === '1') {
+      whereClause += ' AND puzzle_question IS NOT NULL';
+    } else if (hasPuzzle === '0') {
+      whereClause += ' AND puzzle_question IS NULL';
+    }
+  }
+
+  let orderBy = 'created_at DESC';
+  if (sort === 'views') {
+    orderBy = 'views DESC';
+  } else if (sort === 'likes') {
+    orderBy = 'likes DESC';
+  } else if (sort === 'random') {
+    orderBy = 'RANDOM()';
+  }
+
+  const countParams = [...params];
+  params.push(limit, offset);
 
   const monuments = db.prepare(`
     SELECT id, title, subtitle, 
            CASE WHEN puzzle_question IS NOT NULL THEN 1 ELSE 0 END as has_puzzle,
-           views, created_at
+           views, likes, shares, is_featured, created_at
     FROM monuments
-    WHERE is_public = 1
-    ORDER BY created_at DESC
+    ${whereClause}
+    ORDER BY ${orderBy}
     LIMIT ? OFFSET ?
-  `).all(limit, offset);
+  `).all(...params);
 
-  const total = db.prepare('SELECT COUNT(*) as count FROM monuments WHERE is_public = 1').get().count;
+  const total = db.prepare(`SELECT COUNT(*) as count FROM monuments ${whereClause}`).get(...countParams).count;
 
   res.json({
     monuments,
@@ -44,12 +76,62 @@ router.get('/', (req, res) => {
 });
 
 /**
+ * GET /api/monuments/stats
+ * 获取统计数据
+ */
+router.get('/stats/summary', (req, res) => {
+  const totalMonuments = db.prepare('SELECT COUNT(*) as count FROM monuments WHERE is_public = 1').get().count;
+  const totalViews = db.prepare('SELECT COALESCE(SUM(views), 0) as total FROM monuments WHERE is_public = 1').get().total;
+  const totalLikes = db.prepare('SELECT COALESCE(SUM(likes), 0) as total FROM monuments WHERE is_public = 1').get().total;
+  const totalUsers = db.prepare('SELECT COUNT(*) as count FROM users').get().count;
+
+  res.json({
+    totalMonuments,
+    totalViews,
+    totalLikes,
+    totalUsers
+  });
+});
+
+/**
+ * GET /api/monuments/featured
+ * 获取精选纪念碑
+ */
+router.get('/featured/list', (req, res) => {
+  const limit = parseInt(req.query.limit) || 6;
+
+  let featured = db.prepare(`
+    SELECT id, title, subtitle,
+           CASE WHEN puzzle_question IS NOT NULL THEN 1 ELSE 0 END as has_puzzle,
+           views, likes, created_at
+    FROM monuments
+    WHERE is_public = 1 AND is_featured = 1
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).all(limit);
+
+  if (featured.length === 0) {
+    featured = db.prepare(`
+      SELECT id, title, subtitle,
+             CASE WHEN puzzle_question IS NOT NULL THEN 1 ELSE 0 END as has_puzzle,
+             views, likes, created_at
+      FROM monuments
+      WHERE is_public = 1
+      ORDER BY (views + likes * 3) DESC
+      LIMIT ?
+    `).all(limit);
+  }
+
+  res.json(featured);
+});
+
+/**
  * GET /api/monuments/my/list
  * 获取我的纪念碑列表（必须在 /:id 之前定义，否则会被 :id 拦截）
  */
 router.get('/my/list', auth, (req, res) => {
   const monuments = db.prepare(`
-    SELECT id, title, subtitle, views, created_at, updated_at,
+    SELECT id, title, subtitle, views, likes, shares, created_at, updated_at,
            CASE WHEN puzzle_question IS NOT NULL THEN 1 ELSE 0 END as has_puzzle
     FROM monuments WHERE user_id = ?
     ORDER BY created_at DESC
@@ -124,9 +206,28 @@ router.get('/:id', optionalAuth, (req, res) => {
     puzzleQuestion: isOwner ? monument.puzzle_question : undefined,
     isOwner,
     views: monument.views,
+    likes: monument.likes || 0,
+    shares: monument.shares || 0,
     createdAt: monument.created_at,
     updatedAt: monument.updated_at
   });
+});
+
+/**
+ * POST /api/monuments/:id/share
+ * 分享计数
+ */
+router.post('/:id/share', (req, res) => {
+  const { id } = req.params;
+
+  const monument = db.prepare('SELECT id FROM monuments WHERE id = ? AND is_public = 1').get(id);
+  if (!monument) {
+    return res.status(404).json({ error: '纪念碑不存在' });
+  }
+
+  db.prepare('UPDATE monuments SET shares = shares + 1 WHERE id = ?').run(id);
+
+  res.json({ message: '分享成功' });
 });
 
 /**

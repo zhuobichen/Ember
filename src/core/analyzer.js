@@ -7,30 +7,78 @@
  * 3. 分析层: AI 提取人生画像、关系、轨迹
  * 4. 生成层: AI 生成纪念碑（诗/散文/独白/人生记录）
  *
- * 支持 DeepSeek 和 Claude API
+ * 支持多种 AI 提供商:
+ * - deepseek: DeepSeek API
+ * - claude: Anthropic Claude API
+ * - openai: OpenAI API
+ * - ollama: 本地 Ollama 模型（完全离线）
+ * - qwen: 通义千问
+ * - glm: 智谱清言
+ * - gemini: Google Gemini
  */
 
 import { DataMerger } from './merge.js';
+import { DataAnalytics } from './analytics.js';
+
+const PROVIDERS = {
+  DEEPSEEK: 'deepseek',
+  CLAUDE: 'claude',
+  OPENAI: 'openai',
+  OLLAMA: 'ollama',
+  QWEN: 'qwen',
+  GLM: 'glm',
+  GEMINI: 'gemini',
+};
 
 export class MonumentAnalyzer {
   constructor(options = {}) {
-    this.apiProvider = options.provider || 'deepseek'; // deepseek | claude
-    this.apiKey = options.apiKey || process.env.DEEPSEEK_API_KEY || process.env.ANTHROPIC_API_KEY;
+    this.apiProvider = options.provider || process.env.AI_PROVIDER || 'deepseek';
+    this.apiKey = options.apiKey || this._getApiKey();
     this.apiUrl = options.apiUrl || this._getApiUrl();
     this.model = options.model || this._getDefaultModel();
+    this.temperature = options.temperature ?? 0.8;
+    this.maxTokens = options.maxTokens || 4000;
     this.merger = new DataMerger();
+    this.analytics = new DataAnalytics();
+  }
+
+  _getApiKey() {
+    const keyMap = {
+      [PROVIDERS.DEEPSEEK]: process.env.DEEPSEEK_API_KEY,
+      [PROVIDERS.CLAUDE]: process.env.ANTHROPIC_API_KEY,
+      [PROVIDERS.OPENAI]: process.env.OPENAI_API_KEY,
+      [PROVIDERS.QWEN]: process.env.DASHSCOPE_API_KEY,
+      [PROVIDERS.GLM]: process.env.GLM_API_KEY,
+      [PROVIDERS.GEMINI]: process.env.GEMINI_API_KEY,
+      [PROVIDERS.OLLAMA]: null,
+    };
+    return keyMap[this.apiProvider] || null;
   }
 
   _getApiUrl() {
-    if (this.apiProvider === 'claude') {
-      return 'https://api.anthropic.com/v1/messages';
-    }
-    return 'https://api.deepseek.com/v1/chat/completions';
+    const urlMap = {
+      [PROVIDERS.DEEPSEEK]: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1/chat/completions',
+      [PROVIDERS.CLAUDE]: 'https://api.anthropic.com/v1/messages',
+      [PROVIDERS.OPENAI]: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1/chat/completions',
+      [PROVIDERS.QWEN]: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+      [PROVIDERS.GLM]: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+      [PROVIDERS.GEMINI]: `https://generativelanguage.googleapis.com/v1/models/${this.model || 'gemini-pro'}:generateContent`,
+      [PROVIDERS.OLLAMA]: process.env.OLLAMA_BASE_URL || 'http://localhost:11434/api/chat',
+    };
+    return urlMap[this.apiProvider] || urlMap.deepseek;
   }
 
   _getDefaultModel() {
-    if (this.apiProvider === 'claude') return 'claude-sonnet-4-5-20250514';
-    return 'deepseek-chat';
+    const modelMap = {
+      [PROVIDERS.DEEPSEEK]: 'deepseek-chat',
+      [PROVIDERS.CLAUDE]: 'claude-sonnet-4-5-20250514',
+      [PROVIDERS.OPENAI]: 'gpt-4o-mini',
+      [PROVIDERS.QWEN]: 'qwen-plus',
+      [PROVIDERS.GLM]: 'glm-4-flash',
+      [PROVIDERS.GEMINI]: 'gemini-1.5-flash',
+      [PROVIDERS.OLLAMA]: process.env.OLLAMA_MODEL || 'qwen2:7b',
+    };
+    return modelMap[this.apiProvider] || 'deepseek-chat';
   }
 
   /**
@@ -40,10 +88,15 @@ export class MonumentAnalyzer {
    */
   async analyze(data) {
     console.log('[分析] 开始处理数据...');
+    console.log(`[分析] AI 提供商: ${this.apiProvider}${this.apiProvider === 'ollama' ? ' (本地模型)' : ''}`);
+    console.log(`[分析] 模型: ${this.model}`);
 
     // 第1层：统计
     const stats = this.merger.generateStats(data);
     console.log(`[分析] 统计完成: ${stats.totalMessages} 条消息, ${stats.totalContacts} 个联系人`);
+
+    const advancedStats = this.analytics.generateAdvancedStats(data);
+    console.log('[分析] 高级统计完成');
 
     // 第2层：抽样
     const yearlySamples = this.merger.sampleByYear(data, 80);
@@ -67,19 +120,28 @@ export class MonumentAnalyzer {
         generatedAt: new Date().toISOString(),
         platforms: data.meta.platforms,
         totalMessages: stats.totalMessages,
-        timeRange: data.meta.timeRange
+        timeRange: data.meta.timeRange,
+        aiProvider: this.apiProvider,
+        aiModel: this.model,
       },
       epitaph: epitaph,
       trajectory: profile.trajectory || [],
       relationships: profile.relationships || [],
       keywords: profile.keywords || [],
+      lifeThemes: profile.lifeThemes || [],
+      personality: profile.personality || [],
+      communicationStyle: profile.communicationStyle || '',
       stats: {
         totalMessages: stats.totalMessages,
         totalContacts: stats.totalContacts,
         yearBreakdown: stats.yearBreakdown,
         avgMessagesPerDay: stats.avgMessagesPerDay,
-        selfMessageRatio: stats.selfMessageRatio
-      }
+        selfMessageRatio: stats.selfMessageRatio,
+        wordCloud: advancedStats.wordCloud,
+        sentiment: advancedStats.sentiment,
+        schedule: advancedStats.schedule,
+        relationships: advancedStats.relationships,
+      },
     };
   }
 
@@ -88,7 +150,6 @@ export class MonumentAnalyzer {
    */
   async _analyzeProfile(stats, yearlySamples) {
     const prompt = this._buildProfilePrompt(stats, yearlySamples);
-
     const response = await this._callAI(prompt);
     return this._parseJSON(response);
   }
@@ -171,7 +232,6 @@ ${this._formatYearlySamples(yearlySamples)}`;
     const parts = [];
     for (const [year, msgs] of Object.entries(yearlySamples)) {
       parts.push(`\n--- ${year}年 (${msgs.length}条抽样) ---`);
-      // 每年最多展示30条，避免 prompt 太长
       const sample = msgs.slice(0, 30);
       for (const msg of sample) {
         const date = new Date(msg.timestamp * 1000).toLocaleDateString('zh-CN');
@@ -186,43 +246,61 @@ ${this._formatYearlySamples(yearlySamples)}`;
    * 调用 AI API
    */
   async _callAI(prompt) {
+    // Ollama 不需要 API key，直接调用
+    if (this.apiProvider === PROVIDERS.OLLAMA) {
+      try {
+        return await this._callOllama(prompt);
+      } catch (err) {
+        console.warn(`[AI] Ollama 调用失败: ${err.message}`);
+        console.warn('[AI] 回退到本地模拟结果');
+        return this._mockResponse(prompt);
+      }
+    }
+
     if (!this.apiKey) {
       console.warn('[AI] 未配置 API Key，返回模拟结果');
       return this._mockResponse(prompt);
     }
 
-    if (this.apiProvider === 'claude') {
-      return await this._callClaude(prompt);
-    }
-    return await this._callDeepSeek(prompt);
+    const callMap = {
+      [PROVIDERS.DEEPSEEK]: this._callOpenAICompatible.bind(this),
+      [PROVIDERS.OPENAI]: this._callOpenAICompatible.bind(this),
+      [PROVIDERS.QWEN]: this._callOpenAICompatible.bind(this),
+      [PROVIDERS.GLM]: this._callOpenAICompatible.bind(this),
+      [PROVIDERS.CLAUDE]: this._callClaude.bind(this),
+      [PROVIDERS.GEMINI]: this._callGemini.bind(this),
+    };
+
+    const caller = callMap[this.apiProvider] || this._callOpenAICompatible.bind(this);
+    return await caller(prompt);
   }
 
   /**
-   * 调用 DeepSeek API
+   * 调用 OpenAI 兼容格式 API（DeepSeek / OpenAI / Qwen / GLM）
    */
-  async _callDeepSeek(prompt) {
+  async _callOpenAICompatible(prompt) {
     const response = await fetch(this.apiUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`
+        'Authorization': `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify({
         model: this.model,
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0.8,
-        max_tokens: 4000
-      })
+        temperature: this.temperature,
+        max_tokens: this.maxTokens,
+      }),
     });
 
     if (!response.ok) {
       const errText = await response.text().catch(() => '');
-      throw new Error(`DeepSeek API 错误: ${response.status} ${response.statusText}${errText ? ' - ' + errText.substring(0, 200) : ''}`);
+      throw new Error(`${this.apiProvider} API 错误: ${response.status} ${response.statusText}${errText ? ' - ' + errText.substring(0, 200) : ''}`);
     }
 
     const data = await response.json();
     if (!data.choices || !data.choices[0] || !data.choices[0].message) {
-      throw new Error('DeepSeek API 返回异常结构: ' + JSON.stringify(data).substring(0, 200));
+      throw new Error(`${this.apiProvider} API 返回异常结构: ` + JSON.stringify(data).substring(0, 200));
     }
     return data.choices[0].message.content;
   }
@@ -236,13 +314,13 @@ ${this._formatYearlySamples(yearlySamples)}`;
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': this.apiKey,
-        'anthropic-version': '2023-06-01'
+        'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
         model: this.model,
-        max_tokens: 4000,
-        messages: [{ role: 'user', content: prompt }]
-      })
+        max_tokens: this.maxTokens,
+        messages: [{ role: 'user', content: prompt }],
+      }),
     });
 
     if (!response.ok) {
@@ -258,11 +336,79 @@ ${this._formatYearlySamples(yearlySamples)}`;
   }
 
   /**
+   * 调用本地 Ollama 模型
+   */
+  async _callOllama(prompt) {
+    console.log('[Ollama] 正在调用本地模型...');
+    const startTime = Date.now();
+
+    const response = await fetch(this.apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: this.model,
+        messages: [{ role: 'user', content: prompt }],
+        stream: false,
+        options: {
+          temperature: this.temperature,
+          num_predict: this.maxTokens,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text().catch(() => '');
+      throw new Error(`Ollama API 错误: ${response.status} ${response.statusText}${errText ? ' - ' + errText.substring(0, 200) : ''}`);
+    }
+
+    const data = await response.json();
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`[Ollama] 生成完成，耗时 ${elapsed}s`);
+
+    if (!data.message || !data.message.content) {
+      throw new Error('Ollama 返回异常结构: ' + JSON.stringify(data).substring(0, 200));
+    }
+    return data.message.content;
+  }
+
+  /**
+   * 调用 Google Gemini API
+   */
+  async _callGemini(prompt) {
+    const url = this.apiUrl + (this.apiUrl.includes('?') ? '' : `?key=${this.apiKey}`);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: this.temperature,
+          maxOutputTokens: this.maxTokens,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text().catch(() => '');
+      throw new Error(`Gemini API 错误: ${response.status} ${response.statusText}${errText ? ' - ' + errText.substring(0, 200) : ''}`);
+    }
+
+    const data = await response.json();
+    if (!data.candidates || !data.candidates[0]?.content?.parts?.[0]?.text) {
+      throw new Error('Gemini API 返回异常结构: ' + JSON.stringify(data).substring(0, 200));
+    }
+    return data.candidates[0].content.parts[0].text;
+  }
+
+  /**
    * 解析 JSON（容错处理）
    */
   _parseJSON(text) {
     try {
-      // 尝试提取 JSON 块
       const jsonMatch = text.match(/```json\s*([\s\S]*?)```/) ||
                         text.match(/\{[\s\S]*\}/);
       const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : text;
@@ -275,7 +421,7 @@ ${this._formatYearlySamples(yearlySamples)}`;
         relationships: [],
         keywords: [],
         lifeThemes: [],
-        communicationStyle: ''
+        communicationStyle: '',
       };
     }
   }
@@ -292,12 +438,10 @@ ${this._formatYearlySamples(yearlySamples)}`;
       return '{}';
     }
 
-    // 判断是画像分析还是碑文生成
     if (prompt.includes('人生记录分析师')) {
       return this._generateSmartProfile(stats, yearlySamples, data);
     }
 
-    // 碑文生成
     return this._generateSmartEpitaph(stats, yearlySamples, data);
   }
 
@@ -307,21 +451,16 @@ ${this._formatYearlySamples(yearlySamples)}`;
   _generateSmartProfile(stats, yearlySamples, data) {
     const years = Object.keys(stats.yearBreakdown).map(Number).sort((a, b) => a - b);
 
-    // 构建人生轨迹
     const trajectory = [];
     for (const year of years) {
       const msgs = yearlySamples[year] || [];
       if (msgs.length === 0) continue;
 
-      // 提取该年度关键内容
       const selfMsgs = msgs.filter(m => m.isSelf);
       const otherMsgs = msgs.filter(m => !m.isSelf);
-      const allContent = msgs.map(m => m.content).join(' ');
 
-      // 生成年度摘要
       let summary = '';
       if (selfMsgs.length > 0) {
-        // 取最长的自述消息作为线索
         const longest = selfMsgs.reduce((a, b) => a.content.length > b.content.length ? a : b);
         const title = longest.content.split('\n')[0].replace(/《/g, '').replace(/》/g, '');
         summary = `${year}年：${title.substring(0, 40)}${title.length > 40 ? '...' : ''}`;
@@ -334,17 +473,15 @@ ${this._formatYearlySamples(yearlySamples)}`;
       if (summary) trajectory.push({ year, summary });
     }
 
-    // 构建关系网络
     const relationships = (data.contacts || [])
       .sort((a, b) => b.msgCount - a.msgCount)
       .slice(0, 6)
       .map(c => ({
         name: c.name,
         role: c.msgCount > 10 ? '至交好友' : c.msgCount > 5 ? '重要友人' : '相识之人',
-        intimacy: Math.min(1, c.msgCount / 20)
+        intimacy: Math.min(1, c.msgCount / 20),
       }));
 
-    // 构建关键词
     const keywords = [];
     for (const year of years.slice(0, 15)) {
       const msgs = yearlySamples[year] || [];
@@ -354,7 +491,6 @@ ${this._formatYearlySamples(yearlySamples)}`;
       }
     }
 
-    // 提取人生主题
     const allContent = (data.messages || []).map(m => m.content).join(' ');
     const lifeThemes = this._extractLifeThemes(allContent);
 
@@ -364,7 +500,7 @@ ${this._formatYearlySamples(yearlySamples)}`;
       relationships,
       keywords,
       lifeThemes,
-      communicationStyle: this._guessCommStyle(data)
+      communicationStyle: this._guessCommStyle(data),
     });
   }
 
@@ -375,7 +511,6 @@ ${this._formatYearlySamples(yearlySamples)}`;
     const text = msgs.map(m => m.content).join(' ');
     const words = [];
 
-    // 提取书名号内容
     const titles = text.match(/《[^》]+》/g);
     if (titles) {
       for (const t of titles.slice(0, 3)) {
@@ -383,7 +518,6 @@ ${this._formatYearlySamples(yearlySamples)}`;
       }
     }
 
-    // 高频词
     const freqWords = ['酒', '月', '剑', '游', '愁', '归', '梦', '仙', '诗', '友',
       '工作', '生活', '搬家', '加油', '周末', '吃饭', '晚安',
       '长安', '江湖', '天涯', '故乡', '山水', '自由', '理想'];
@@ -455,7 +589,6 @@ ${this._formatYearlySamples(yearlySamples)}`;
     const selfMsgs = allMsgs.filter(m => m.isSelf);
     const otherMsgs = allMsgs.filter(m => !m.isSelf);
 
-    // 提取代表性诗句/语录
     const works = selfMsgs
       .filter(m => m.content.includes('《'))
       .map(m => {
@@ -466,20 +599,16 @@ ${this._formatYearlySamples(yearlySamples)}`;
       })
       .slice(0, 8);
 
-    // 提取友人评价
     const evaluations = otherMsgs
       .filter(m => m.type === 'text' && m.content.length > 20 && m.sender !== '史官')
       .slice(-5);
 
-    // 提取史料记载
     const histories = otherMsgs
       .filter(m => m.sender === '史官' || m.type === 'system')
       .slice(0, 5);
 
-    // 构建碑文
     const parts = [];
 
-    // 开篇：时间跨度
     const startYear = years[0];
     const endYear = years[years.length - 1];
     parts.push(`这是一个人的一生。`);
@@ -487,7 +616,6 @@ ${this._formatYearlySamples(yearlySamples)}`;
     parts.push(`${stats.totalMessages}条记录，${stats.totalContacts}个与他有过交集的人。`);
     parts.push('');
 
-    // 人生轨迹
     if (histories.length > 0) {
       parts.push('—— 生平 ——');
       for (const h of histories.slice(0, 4)) {
@@ -497,7 +625,6 @@ ${this._formatYearlySamples(yearlySamples)}`;
       parts.push('');
     }
 
-    // 代表作
     if (works.length > 0) {
       parts.push('—— 他写下的 ——');
       for (const work of works.slice(0, 5)) {
@@ -507,7 +634,6 @@ ${this._formatYearlySamples(yearlySamples)}`;
       parts.push('');
     }
 
-    // 友人
     const friends = (data.contacts || [])
       .filter(c => c.name !== '创作记录' && c.name !== '史料记载' && c.name !== '后人评价' && c.name !== '书信文书' && c.name !== '生活轶事')
       .sort((a, b) => b.msgCount - a.msgCount)
@@ -521,7 +647,6 @@ ${this._formatYearlySamples(yearlySamples)}`;
       parts.push('');
     }
 
-    // 后人评价
     if (evaluations.length > 0) {
       parts.push('—— 别人眼中的他 ——');
       for (const e of evaluations.slice(0, 3)) {
@@ -531,7 +656,6 @@ ${this._formatYearlySamples(yearlySamples)}`;
       parts.push('');
     }
 
-    // 结语
     parts.push('——');
     parts.push('如果有人路过这座碑，');
     parts.push('请知道：这里有一个人，认真地活过、写过、爱过。');
@@ -540,3 +664,5 @@ ${this._formatYearlySamples(yearlySamples)}`;
     return parts.join('\n');
   }
 }
+
+export { PROVIDERS };

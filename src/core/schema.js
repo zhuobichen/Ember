@@ -60,6 +60,9 @@ export const PLATFORMS = {
   WECHAT: 'wechat',
   QQ: 'qq',
   FEISHU: 'feishu',
+  TELEGRAM: 'telegram',
+  DISCORD: 'discord',
+  WEIBO: 'weibo',
   // 网搜资料平台类型
   WEB: 'web',       // 网络公开内容（演讲、语录、文章）
   SOCIAL: 'social',  // 社交互动（问答、对话、评论）

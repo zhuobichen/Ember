@@ -16,7 +16,8 @@
     "valley:server": "node valley/server/index.js",
     "valley:client": "cd valley/client && npm run dev",
     "valley:build": "cd valley/client && npm run build",
-    "test": "node src/index.js generate --celebrity su-shi --no-burn"
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "commander": "^12.0.0",
@@ -41,5 +42,8 @@
   },
   "engines": {
     "node": ">=22.0.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.9"
   }
 }

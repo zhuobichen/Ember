@@ -47,3 +47,11 @@ valley/server/data/
 !tsconfig.json
 !vite.config.*
 !eslint.config.*
+!vitest.config.*
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Test cache
+.vitest/

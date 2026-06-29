@@ -3,6 +3,7 @@
  */
 
 import { Router } from 'express';
+import crypto from 'crypto';
 import db from '../db/init.js';
 import { auth, optionalAuth } from './auth.js';
 
@@ -145,6 +146,83 @@ router.put('/bottles/:id/read', auth, (req, res) => {
 
   db.prepare('UPDATE drift_bottles SET is_read = 1 WHERE id = ?').run(id);
   res.json({ message: '已标记为已读' });
+});
+
+// ========== 点赞 ==========
+
+function getIpHash(req) {
+  const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress || req.ip || 'unknown';
+  return crypto.createHash('md5').update(ip).digest('hex');
+}
+
+/**
+ * GET /api/monuments/:id/like
+ * 检查是否已点赞
+ */
+router.get('/monuments/:id/like', optionalAuth, (req, res) => {
+  const { id } = req.params;
+  const ipHash = getIpHash(req);
+
+  let liked = false;
+  if (req.userId) {
+    const existing = db.prepare(
+      'SELECT id FROM likes WHERE monument_id = ? AND user_id = ?'
+    ).get(id, req.userId);
+    liked = !!existing;
+  } else {
+    const existing = db.prepare(
+      'SELECT id FROM likes WHERE monument_id = ? AND ip_hash = ? AND user_id IS NULL'
+    ).get(id, ipHash);
+    liked = !!existing;
+  }
+
+  const monument = db.prepare('SELECT likes FROM monuments WHERE id = ?').get(id);
+  res.json({ liked, likes: monument?.likes || 0 });
+});
+
+/**
+ * POST /api/monuments/:id/like
+ * 点赞/取消点赞
+ */
+router.post('/monuments/:id/like', optionalAuth, (req, res) => {
+  const { id } = req.params;
+  const ipHash = getIpHash(req);
+
+  const monument = db.prepare('SELECT id FROM monuments WHERE id = ? AND is_public = 1').get(id);
+  if (!monument) {
+    return res.status(404).json({ error: '纪念碑不存在' });
+  }
+
+  let existing;
+  if (req.userId) {
+    existing = db.prepare(
+      'SELECT id FROM likes WHERE monument_id = ? AND user_id = ?'
+    ).get(id, req.userId);
+  } else {
+    existing = db.prepare(
+      'SELECT id FROM likes WHERE monument_id = ? AND ip_hash = ? AND user_id IS NULL'
+    ).get(id, ipHash);
+  }
+
+  if (existing) {
+    db.prepare('DELETE FROM likes WHERE id = ?').run(existing.id);
+    db.prepare('UPDATE monuments SET likes = likes - 1 WHERE id = ?').run(id);
+    res.json({ liked: false, likes: Math.max(0, (monument.likes || 0) - 1) });
+  } else {
+    try {
+      db.prepare(
+        'INSERT INTO likes (monument_id, user_id, ip_hash) VALUES (?, ?, ?)'
+      ).run(id, req.userId || null, ipHash);
+      db.prepare('UPDATE monuments SET likes = likes + 1 WHERE id = ?').run(id);
+      res.json({ liked: true, likes: (monument.likes || 0) + 1 });
+    } catch (err) {
+      if (err.message.includes('UNIQUE')) {
+        res.json({ liked: true, likes: monument.likes || 0 });
+      } else {
+        res.status(500).json({ error: '操作失败' });
+      }
+    }
+  }
 });
 
 export default router;

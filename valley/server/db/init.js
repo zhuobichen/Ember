@@ -14,7 +14,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dbPath = path.join(__dirname, 'valley.db');
+const dbPath = process.env.VALLEY_DB_PATH || path.join(__dirname, 'valley.db');
 
 const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
@@ -39,6 +39,9 @@ db.exec(`
     puzzle_answer TEXT,                   -- 谜题答案（哈希存储）
     is_public INTEGER DEFAULT 1,
     views INTEGER DEFAULT 0,
+    likes INTEGER DEFAULT 0,
+    shares INTEGER DEFAULT 0,
+    is_featured INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (user_id) REFERENCES users(id)
@@ -63,6 +66,17 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (monument_id) REFERENCES monuments(id),
     FOREIGN KEY (sender_id) REFERENCES users(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS likes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    monument_id INTEGER NOT NULL,
+    user_id INTEGER,                      -- 可为空（匿名点赞）
+    ip_hash TEXT,                         -- IP 哈希（用于匿名点赞去重）
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (monument_id) REFERENCES monuments(id),
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    UNIQUE(monument_id, user_id, ip_hash)
   );
 `);
 

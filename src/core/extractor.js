@@ -866,6 +866,476 @@ export class MessageExtractor {
   }
 
   // ============================================================
+  //  Telegram 消息提取
+  // ============================================================
+
+  /**
+   * 提取 Telegram 消息
+   * @param {Object} opts
+   * @param {string} opts.file - 已导出的 JSON 文件路径
+   */
+  async extractTelegram(opts = {}) {
+    console.log('  [Telegram] 开始提取...');
+
+    if (!opts.file) {
+      throw new Error('Telegram 提取需要 file 参数（已导出的 JSON 文件路径）');
+    }
+
+    console.log(`  [Telegram] 从文件加载: ${opts.file}`);
+    const raw = JSON.parse(fs.readFileSync(opts.file, 'utf-8'));
+    return this._parseTelegramMessages(raw);
+  }
+
+  _parseTelegramMessages(raw) {
+    const data = createEmptyData();
+    data.meta.platforms = [PLATFORMS.TELEGRAM];
+    const contactMap = new Map();
+
+    const chats = raw.chats?.list || raw.chats || (raw.messages ? [raw] : []) || [];
+
+    for (const chat of chats) {
+      const chatId = String(chat.id || chat.chat_id || '');
+      const chatName = chat.name || chat.title || `聊天${chatId}`;
+      const isGroup = chat.type === 'supergroup' || chat.type === 'group' || chat.type === 'channel';
+      const messages = chat.messages || [];
+
+      for (const msg of messages) {
+        if (msg.type && msg.type !== 'message') continue;
+
+        const msgType = this._detectTelegramMessageType(msg);
+        const type = this._mapTelegramType(msgType);
+        const content = this._parseTelegramContent(msg, type);
+        if (!content && type === MESSAGE_TYPES.TEXT) continue;
+
+        const sender = msg.from || msg.sender_name || '未知';
+        const isSelf = msg.out === true;
+
+        let timestamp = 0;
+        if (msg.date) {
+          const ts = new Date(msg.date).getTime();
+          if (!isNaN(ts)) timestamp = Math.floor(ts / 1000);
+        }
+
+        data.messages.push({
+          platform: PLATFORMS.TELEGRAM,
+          messageId: String(msg.id || ''),
+          chatId,
+          chatName,
+          sender: isSelf ? '我' : sender,
+          isSelf,
+          timestamp,
+          type,
+          content
+        });
+
+        if (!contactMap.has(chatId)) {
+          contactMap.set(chatId, {
+            name: chatName, platform: PLATFORMS.TELEGRAM, chatId,
+            msgCount: 0, selfMsgCount: 0, lastActive: 0, isGroup
+          });
+        }
+        const contact = contactMap.get(chatId);
+        contact.msgCount++;
+        if (isSelf) contact.selfMsgCount++;
+        if (timestamp > contact.lastActive) contact.lastActive = timestamp;
+      }
+    }
+
+    data.contacts = Array.from(contactMap.values());
+    updateMeta(data);
+    console.log(`  [Telegram] 共提取 ${data.messages.length} 条消息`);
+    return data;
+  }
+
+  _detectTelegramMessageType(msg) {
+    if (msg.photo) return 'photo';
+    if (msg.voice_message) return 'voice_message';
+    if (msg.video_message) return 'video_message';
+    if (msg.video) return 'video';
+    if (msg.document) return 'document';
+    if (msg.sticker) return 'sticker';
+    if (msg.animation) return 'animation';
+    if (msg.audio) return 'audio';
+    return 'message';
+  }
+
+  _mapTelegramType(msgType) {
+    const map = {
+      message: MESSAGE_TYPES.TEXT,
+      photo: MESSAGE_TYPES.IMAGE,
+      voice_message: MESSAGE_TYPES.VOICE,
+      video_message: MESSAGE_TYPES.VIDEO,
+      video: MESSAGE_TYPES.VIDEO,
+      document: MESSAGE_TYPES.FILE,
+      sticker: MESSAGE_TYPES.EMOJI,
+      animation: MESSAGE_TYPES.VIDEO,
+      audio: MESSAGE_TYPES.VOICE
+    };
+    return map[msgType] || MESSAGE_TYPES.TEXT;
+  }
+
+  _parseTelegramContent(msg, type) {
+    switch (type) {
+      case MESSAGE_TYPES.TEXT: {
+        if (typeof msg.text === 'string') return msg.text;
+        if (Array.isArray(msg.text)) {
+          return msg.text.map(part => {
+            if (typeof part === 'string') return part;
+            return part.text || '';
+          }).join('');
+        }
+        return '';
+      }
+      case MESSAGE_TYPES.IMAGE: {
+        const caption = this._extractTelegramCaption(msg);
+        return caption ? `[图片] ${caption}` : '[图片]';
+      }
+      case MESSAGE_TYPES.VOICE:
+        return '[语音]';
+      case MESSAGE_TYPES.VIDEO: {
+        const caption = this._extractTelegramCaption(msg);
+        return caption ? `[视频] ${caption}` : '[视频]';
+      }
+      case MESSAGE_TYPES.FILE:
+        return `[文件] ${msg.file_name || msg.document?.file_name || ''}`;
+      case MESSAGE_TYPES.EMOJI:
+        return `[表情] ${msg.sticker?.emoji || ''}`;
+      default:
+        return msg.text || '[未知消息]';
+    }
+  }
+
+  _extractTelegramCaption(msg) {
+    if (!msg.caption) return '';
+    if (typeof msg.caption === 'string') return msg.caption;
+    if (Array.isArray(msg.caption)) {
+      return msg.caption.map(p => typeof p === 'string' ? p : (p.text || '')).join('');
+    }
+    return '';
+  }
+
+  // ============================================================
+  //  Discord 消息提取
+  // ============================================================
+
+  /**
+   * 提取 Discord 消息
+   * @param {Object} opts
+   * @param {string} opts.file - 已导出的 JSON 文件路径
+   */
+  async extractDiscord(opts = {}) {
+    console.log('  [Discord] 开始提取...');
+
+    if (!opts.file) {
+      throw new Error('Discord 提取需要 file 参数（已导出的 JSON 文件路径）');
+    }
+
+    console.log(`  [Discord] 从文件加载: ${opts.file}`);
+    const raw = JSON.parse(fs.readFileSync(opts.file, 'utf-8'));
+    return this._parseDiscordMessages(raw);
+  }
+
+  _parseDiscordMessages(raw) {
+    const data = createEmptyData();
+    data.meta.platforms = [PLATFORMS.DISCORD];
+    const contactMap = new Map();
+
+    const exports = Array.isArray(raw) ? raw : (raw.exports ? raw.exports : [raw]);
+
+    for (const exp of exports) {
+      const guild = exp.guild || {};
+      const channel = exp.channel || {};
+      const messages = exp.messages || channel.messages || [];
+
+      const guildName = guild.name || 'DM';
+      const guildId = guild.id || 'dm';
+      const channelName = channel.name || '私聊';
+      const channelId = channel.id || '';
+      const isGroup = !!guild.id || channel.type === 0 || channel.type === 'GuildTextChat';
+
+      const chatId = isGroup ? `${guildId}_${channelId}` : `dm_${channelId}`;
+      const chatName = isGroup ? `${guildName} / ${channelName}` : (channel.recipients?.map(r => r.name).join(', ') || channelName);
+
+      for (const msg of messages) {
+        const type = this._detectDiscordMessageType(msg);
+        const content = this._parseDiscordContent(msg, type);
+        if (!content && type === MESSAGE_TYPES.TEXT) continue;
+
+        const sender = msg.author?.name || msg.author?.username || '未知';
+        const isSelf = msg.author?.isSelf || false;
+
+        let timestamp = 0;
+        if (msg.timestamp) {
+          const ts = new Date(msg.timestamp).getTime();
+          if (!isNaN(ts)) timestamp = Math.floor(ts / 1000);
+        }
+
+        data.messages.push({
+          platform: PLATFORMS.DISCORD,
+          messageId: String(msg.id || ''),
+          chatId,
+          chatName,
+          sender: isSelf ? '我' : sender,
+          isSelf,
+          timestamp,
+          type,
+          content
+        });
+
+        if (!contactMap.has(chatId)) {
+          contactMap.set(chatId, {
+            name: chatName, platform: PLATFORMS.DISCORD, chatId,
+            msgCount: 0, selfMsgCount: 0, lastActive: 0, isGroup
+          });
+        }
+        const contact = contactMap.get(chatId);
+        contact.msgCount++;
+        if (isSelf) contact.selfMsgCount++;
+        if (timestamp > contact.lastActive) contact.lastActive = timestamp;
+      }
+    }
+
+    data.contacts = Array.from(contactMap.values());
+    updateMeta(data);
+    console.log(`  [Discord] 共提取 ${data.messages.length} 条消息`);
+    return data;
+  }
+
+  _detectDiscordMessageType(msg) {
+    if (msg.attachments && msg.attachments.length > 0) {
+      const first = msg.attachments[0];
+      if (first?.contentType?.startsWith('image/')) return MESSAGE_TYPES.IMAGE;
+      if (first?.contentType?.startsWith('video/')) return MESSAGE_TYPES.VIDEO;
+      if (first?.contentType?.startsWith('audio/')) return MESSAGE_TYPES.VOICE;
+      return MESSAGE_TYPES.FILE;
+    }
+    if (msg.embeds && msg.embeds.length > 0) {
+      return MESSAGE_TYPES.LINK;
+    }
+    return MESSAGE_TYPES.TEXT;
+  }
+
+  _parseDiscordContent(msg, type) {
+    switch (type) {
+      case MESSAGE_TYPES.TEXT:
+        return msg.content || '';
+      case MESSAGE_TYPES.IMAGE: {
+        const text = msg.content || '';
+        const imgCount = (msg.attachments || []).filter(a => a.contentType?.startsWith('image/')).length;
+        const imgText = imgCount > 0 ? `[图片 x${imgCount}]` : '[图片]';
+        return text ? `${imgText} ${text}` : imgText;
+      }
+      case MESSAGE_TYPES.VIDEO: {
+        const text = msg.content || '';
+        const videoCount = (msg.attachments || []).filter(a => a.contentType?.startsWith('video/')).length;
+        const videoText = videoCount > 0 ? `[视频 x${videoCount}]` : '[视频]';
+        return text ? `${videoText} ${text}` : videoText;
+      }
+      case MESSAGE_TYPES.VOICE: {
+        const text = msg.content || '';
+        return text ? `[语音] ${text}` : '[语音]';
+      }
+      case MESSAGE_TYPES.FILE: {
+        const text = msg.content || '';
+        const files = (msg.attachments || []).map(a => a.fileName || a.name || '').filter(Boolean);
+        const fileText = files.length > 0 ? `[文件] ${files.join(', ')}` : '[文件]';
+        return text ? `${fileText} ${text}` : fileText;
+      }
+      case MESSAGE_TYPES.LINK: {
+        const text = msg.content || '';
+        const embeds = msg.embeds || [];
+        const embedTexts = embeds.map(e => {
+          if (e.title && e.url) return `[嵌入] ${e.title} - ${e.url}`;
+          if (e.title) return `[嵌入] ${e.title}`;
+          if (e.description) return `[嵌入] ${e.description.substring(0, 100)}`;
+          return '[嵌入]';
+        });
+        const allEmbeds = embedTexts.join('\n');
+        return text ? `${text}\n${allEmbeds}` : allEmbeds;
+      }
+      default:
+        return msg.content || '[未知消息]';
+    }
+  }
+
+  // ============================================================
+  //  微博消息提取
+  // ============================================================
+
+  /**
+   * 提取微博消息
+   * @param {Object} opts
+   * @param {string} opts.file - 已导出的 JSON 文件路径
+   */
+  async extractWeibo(opts = {}) {
+    console.log('  [微博] 开始提取...');
+
+    if (!opts.file) {
+      throw new Error('微博提取需要 file 参数（已导出的 JSON 文件路径）');
+    }
+
+    console.log(`  [微博] 从文件加载: ${opts.file}`);
+    const raw = JSON.parse(fs.readFileSync(opts.file, 'utf-8'));
+    return this._parseWeiboMessages(raw);
+  }
+
+  _parseWeiboMessages(raw) {
+    const data = createEmptyData();
+    data.meta.platforms = [PLATFORMS.WEIBO];
+    const contactMap = new Map();
+
+    const weibos = raw.weibos || raw.data || raw.statuses || (Array.isArray(raw) ? raw : []) || [];
+
+    for (const weibo of weibos) {
+      const weiboId = String(weibo.id || weibo.mid || weibo.bid || '');
+      const weiboText = weibo.text || weibo.content || weibo.status_content || '';
+      const createdAt = weibo.created_at || weibo.createTime || weibo.timestamp || '';
+      const isSelf = weibo.isSelf || weibo.is_self || false;
+      const userName = weibo.user?.screen_name || weibo.user?.name || weibo.userName || '我';
+
+      let timestamp = 0;
+      if (createdAt) {
+        if (typeof createdAt === 'number') {
+          timestamp = createdAt > 1e12 ? Math.floor(createdAt / 1000) : createdAt;
+        } else {
+          const ts = new Date(createdAt).getTime();
+          if (!isNaN(ts)) timestamp = Math.floor(ts / 1000);
+        }
+      }
+
+      let content = weiboText;
+      if (weibo.pics && weibo.pics.length > 0) {
+        content += `\n[图片 x${weibo.pics.length}]`;
+      }
+      if (weibo.retweeted_status) {
+        const rt = weibo.retweeted_status;
+        const rtUser = rt.user?.screen_name || rt.user?.name || '';
+        const rtText = rt.text || rt.content || '';
+        content += `\n[转发] @${rtUser}: ${rtText}`;
+      }
+
+      const chatId = 'weibo_posts';
+      const chatName = '我的微博';
+
+      data.messages.push({
+        platform: PLATFORMS.WEIBO,
+        messageId: `weibo_${weiboId}`,
+        chatId,
+        chatName,
+        sender: isSelf ? '我' : userName,
+        isSelf,
+        timestamp,
+        type: MESSAGE_TYPES.TEXT,
+        content
+      });
+
+      if (!contactMap.has(chatId)) {
+        contactMap.set(chatId, {
+          name: chatName, platform: PLATFORMS.WEIBO, chatId,
+          msgCount: 0, selfMsgCount: 0, lastActive: 0, isGroup: false
+        });
+      }
+      const contact = contactMap.get(chatId);
+      contact.msgCount++;
+      if (isSelf) contact.selfMsgCount++;
+      if (timestamp > contact.lastActive) contact.lastActive = timestamp;
+
+      if (weibo.comments && weibo.comments.length > 0) {
+        for (const comment of weibo.comments) {
+          const commentId = comment.id || '';
+          const commentText = comment.text || comment.content || '';
+          const commentTime = comment.created_at || comment.create_time || '';
+          const commentUser = comment.user?.screen_name || comment.user?.name || comment.commenter || '匿名';
+
+          let commentTimestamp = 0;
+          if (commentTime) {
+            if (typeof commentTime === 'number') {
+              commentTimestamp = commentTime > 1e12 ? Math.floor(commentTime / 1000) : commentTime;
+            } else {
+              const ts = new Date(commentTime).getTime();
+              if (!isNaN(ts)) commentTimestamp = Math.floor(ts / 1000);
+            }
+          }
+
+          const commentChatId = `weibo_comments_${weiboId}`;
+          const commentChatName = `微博评论 (${weiboId.substring(0, 8)})`;
+
+          data.messages.push({
+            platform: PLATFORMS.WEIBO,
+            messageId: `weibo_comment_${commentId}`,
+            chatId: commentChatId,
+            chatName: commentChatName,
+            sender: commentUser,
+            isSelf: false,
+            timestamp: commentTimestamp,
+            type: MESSAGE_TYPES.TEXT,
+            content: commentText
+          });
+
+          if (!contactMap.has(commentChatId)) {
+            contactMap.set(commentChatId, {
+              name: commentChatName, platform: PLATFORMS.WEIBO, chatId: commentChatId,
+              msgCount: 0, selfMsgCount: 0, lastActive: 0, isGroup: true
+            });
+          }
+          const cContact = contactMap.get(commentChatId);
+          cContact.msgCount++;
+          if (commentTimestamp > cContact.lastActive) cContact.lastActive = commentTimestamp;
+        }
+      }
+
+      if (weibo.reposts && weibo.reposts.length > 0) {
+        for (const repost of weibo.reposts) {
+          const repostId = repost.id || '';
+          const repostText = repost.text || repost.content || '';
+          const repostTime = repost.created_at || repost.create_time || '';
+          const repostUser = repost.user?.screen_name || repost.user?.name || '匿名';
+
+          let repostTimestamp = 0;
+          if (repostTime) {
+            if (typeof repostTime === 'number') {
+              repostTimestamp = repostTime > 1e12 ? Math.floor(repostTime / 1000) : repostTime;
+            } else {
+              const ts = new Date(repostTime).getTime();
+              if (!isNaN(ts)) repostTimestamp = Math.floor(ts / 1000);
+            }
+          }
+
+          const repostChatId = `weibo_reposts_${weiboId}`;
+          const repostChatName = `微博转发 (${weiboId.substring(0, 8)})`;
+
+          data.messages.push({
+            platform: PLATFORMS.WEIBO,
+            messageId: `weibo_repost_${repostId}`,
+            chatId: repostChatId,
+            chatName: repostChatName,
+            sender: repostUser,
+            isSelf: false,
+            timestamp: repostTimestamp,
+            type: MESSAGE_TYPES.TEXT,
+            content: repostText
+          });
+
+          if (!contactMap.has(repostChatId)) {
+            contactMap.set(repostChatId, {
+              name: repostChatName, platform: PLATFORMS.WEIBO, chatId: repostChatId,
+              msgCount: 0, selfMsgCount: 0, lastActive: 0, isGroup: true
+            });
+          }
+          const rContact = contactMap.get(repostChatId);
+          rContact.msgCount++;
+          if (repostTimestamp > rContact.lastActive) rContact.lastActive = repostTimestamp;
+        }
+      }
+    }
+
+    data.contacts = Array.from(contactMap.values());
+    updateMeta(data);
+    console.log(`  [微博] 共提取 ${data.messages.length} 条消息`);
+    return data;
+  }
+
+  // ============================================================
   //  一键提取全部
   // ============================================================
 
@@ -876,6 +1346,9 @@ export class MessageExtractor {
    * @param {Object} [config.feishu] - 飞书配置 { appId, appSecret, chatId, file }
    * @param {Object} [config.qq] - QQ 配置 { baseUrl, groupId, userId, file }
    * @param {Object} [config.qqzone] - QQ空间配置 { uin, cookie, gtk, file }
+   * @param {Object} [config.telegram] - Telegram 配置 { file }
+   * @param {Object} [config.discord] - Discord 配置 { file }
+   * @param {Object} [config.weibo] - 微博配置 { file }
    */
   async extractAll(config = {}) {
     console.log('===== 多平台消息提取 =====\n');
@@ -907,6 +1380,27 @@ export class MessageExtractor {
         const data = await this.extractQQZone(config.qqzone);
         if (data) { dataList.push(data); console.log(`  [QQ空间] ✓ ${data.messages.length} 条消息\n`); }
       } catch (err) { console.warn(`  [QQ空间] ✗ ${err.message}\n`); }
+    }
+
+    if (config.telegram) {
+      try {
+        const data = await this.extractTelegram(config.telegram);
+        if (data) { dataList.push(data); console.log(`  [Telegram] ✓ ${data.messages.length} 条消息\n`); }
+      } catch (err) { console.warn(`  [Telegram] ✗ ${err.message}\n`); }
+    }
+
+    if (config.discord) {
+      try {
+        const data = await this.extractDiscord(config.discord);
+        if (data) { dataList.push(data); console.log(`  [Discord] ✓ ${data.messages.length} 条消息\n`); }
+      } catch (err) { console.warn(`  [Discord] ✗ ${err.message}\n`); }
+    }
+
+    if (config.weibo) {
+      try {
+        const data = await this.extractWeibo(config.weibo);
+        if (data) { dataList.push(data); console.log(`  [微博] ✓ ${data.messages.length} 条消息\n`); }
+      } catch (err) { console.warn(`  [微博] ✗ ${err.message}\n`); }
     }
 
     if (dataList.length === 0) {
