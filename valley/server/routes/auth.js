@@ -4,7 +4,14 @@
 
 import jwt from 'jsonwebtoken';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'monument-valley-secret-2026';
+const JWT_SECRET = process.env.JWT_SECRET;
+
+if (!JWT_SECRET) {
+  console.error('错误: 未设置 JWT_SECRET 环境变量');
+  console.error('请在 .env 文件中配置 JWT_SECRET=<随机字符串>');
+  console.error('可用以下命令生成: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+  process.exit(1);
+}
 
 /**
  * 生成 JWT Token

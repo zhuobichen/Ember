@@ -268,6 +268,7 @@ Ember/
 │   ├── core/
 │   │   ├── extractor.js      # 统一消息提取器（微信/QQ/飞书/QQ空间）
 │   │   ├── wechat-db.js      # 微信数据库解密读取（自包含）
+│   │   ├── parsers.js        # 共享消息解析器（类型映射/内容提取）
 │   │   ├── analyzer.js       # AI 分析器（DeepSeek/Claude）
 │   │   ├── generator.js      # 纪念碑生成器
 │   │   ├── burner.js         # 数据焚毁器（DoD 5220.22-M）
@@ -280,6 +281,7 @@ Ember/
 ├── valley/                   # 纪念碑谷平台
 │   ├── server/               # Express + SQLite 后端
 │   └── client/               # React 前端
+├── proposal/                 # 参赛提案展示页
 ├── assets/
 │   └── logo.png              # 项目图标
 ├── .env.example              # 环境变量模板

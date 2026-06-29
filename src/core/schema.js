@@ -84,25 +84,6 @@ export function createEmptyData() {
 }
 
 /**
- * 验证消息格式是否合法
- */
-export function validateMessage(msg) {
-  const required = ['platform', 'chatId', 'sender', 'isSelf', 'timestamp', 'type', 'content'];
-  for (const field of required) {
-    if (msg[field] === undefined || msg[field] === null) {
-      return { valid: false, error: `Missing field: ${field}` };
-    }
-  }
-  if (!Object.values(PLATFORMS).includes(msg.platform)) {
-    return { valid: false, error: `Invalid platform: ${msg.platform}` };
-  }
-  if (!Object.values(MESSAGE_TYPES).includes(msg.type)) {
-    return { valid: false, error: `Invalid type: ${msg.type}` };
-  }
-  return { valid: true };
-}
-
-/**
  * 更新数据的元信息（消息数、时间范围等）
  */
 export function updateMeta(data) {

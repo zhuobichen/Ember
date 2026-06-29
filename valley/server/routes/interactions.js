@@ -18,7 +18,8 @@ router.get('/monuments/:id/comments', (req, res) => {
   const { id } = req.params;
 
   const comments = db.prepare(`
-    SELECT c.id, c.content, c.created_at,
+    SELECT c.id, c.content,
+           strftime('%Y-%m-%dT%H:%M:%SZ', c.created_at) as created_at,
            u.alias as author_alias
     FROM comments c
     LEFT JOIN users u ON c.user_id = u.id
@@ -76,14 +77,16 @@ router.get('/monuments/:id/bottles', optionalAuth, (req, res) => {
   if (isOwner) {
     // 作者可以看到所有漂流瓶
     bottles = db.prepare(`
-      SELECT id, message, is_read, created_at
+      SELECT id, message, is_read,
+             strftime('%Y-%m-%dT%H:%M:%SZ', created_at) as created_at
       FROM drift_bottles WHERE monument_id = ?
       ORDER BY created_at DESC
     `).all(id);
   } else {
     // 非作者只能看到已读的漂流瓶（公开的）
     bottles = db.prepare(`
-      SELECT id, message, created_at
+      SELECT id, message,
+             strftime('%Y-%m-%dT%H:%M:%SZ', created_at) as created_at
       FROM drift_bottles WHERE monument_id = ? AND is_read = 1
       ORDER BY created_at DESC
     `).all(id);

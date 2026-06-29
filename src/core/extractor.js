@@ -45,24 +45,9 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { createEmptyData, updateMeta, MESSAGE_TYPES, PLATFORMS } from './schema.js';
 import { WechatDB } from './wechat-db.js';
+import { WECHAT_TYPE_MAP, FEISHU_TYPE_MAP, parseQQSegments, detectQQMessageType, parseFeishuContent } from './parsers.js';
 
 const execAsync = promisify(exec);
-
-// ==================== 微信消息类型映射 ====================
-const WECHAT_TYPE_MAP = {
-  1: MESSAGE_TYPES.TEXT,    3: MESSAGE_TYPES.IMAGE,   34: MESSAGE_TYPES.VOICE,
-  43: MESSAGE_TYPES.VIDEO,  47: MESSAGE_TYPES.EMOJI,  49: MESSAGE_TYPES.LINK,
-  10000: MESSAGE_TYPES.SYSTEM, 10002: MESSAGE_TYPES.UNKNOWN
-};
-
-// ==================== 飞书消息类型映射 ====================
-const FEISHU_TYPE_MAP = {
-  text: MESSAGE_TYPES.TEXT,    post: MESSAGE_TYPES.TEXT,
-  image: MESSAGE_TYPES.IMAGE,  file: MESSAGE_TYPES.FILE,
-  audio: MESSAGE_TYPES.VOICE,  video: MESSAGE_TYPES.VIDEO,
-  sticker: MESSAGE_TYPES.EMOJI, interactive: MESSAGE_TYPES.UNKNOWN,
-  share_chat: MESSAGE_TYPES.LINK, share_user: MESSAGE_TYPES.LINK
-};
 
 export class MessageExtractor {
   constructor() {
@@ -213,71 +198,12 @@ export class MessageExtractor {
   /**
    * 解析微信消息（weflow-cli JSON 格式 → 标准格式）
    */
+  /**
+   * 解析微信消息（weflow-cli JSON 格式 → 标准格式）
+   * 委托给共享解析器 parsers.js
+   */
   _parseWechatMessages(raw) {
-    const data = createEmptyData();
-    data.meta.platforms = [PLATFORMS.WECHAT];
-    const contactMap = new Map();
-
-    // weflow 导出可能是数组（单聊天）或对象（多聊天）
-    const chats = Array.isArray(raw) ? [{ messages: raw }] : (raw.chats || [raw]);
-
-    for (const chat of chats) {
-      const chatName = chat.name || chat.nickName || chat.strNickName || '未知';
-      const chatId = chat.id || chat.username || chat.strTalker || chatName;
-      const messages = chat.messages || chat.msgList || chat;
-      let msgCount = 0, selfMsgCount = 0, lastActive = 0;
-
-      for (const msg of messages) {
-        const type = WECHAT_TYPE_MAP[msg.localType || msg.type] || MESSAGE_TYPES.UNKNOWN;
-        if (type === MESSAGE_TYPES.SYSTEM) continue;
-
-        let content = '';
-        switch (type) {
-          case MESSAGE_TYPES.TEXT:
-            content = msg.parsedContent || msg.content || '';
-            break;
-          case MESSAGE_TYPES.IMAGE: content = '[图片]'; break;
-          case MESSAGE_TYPES.VOICE: content = '[语音]'; break;
-          case MESSAGE_TYPES.VIDEO: content = '[视频]'; break;
-          case MESSAGE_TYPES.EMOJI: content = '[表情]'; break;
-          case MESSAGE_TYPES.LINK:
-            content = msg.appTitle ? `[链接] ${msg.appTitle}` : '[链接]';
-            if (msg.appDescription) content += ` - ${msg.appDescription}`;
-            break;
-          default:
-            content = msg.parsedContent || msg.content || '[未知消息]';
-        }
-
-        const isSelf = msg.isSend === 1 || msg.isSend === true;
-        const standardMsg = {
-          platform: PLATFORMS.WECHAT,
-          messageId: String(msg.localId || msg.local_id || msg.serverId || ''),
-          chatId: String(chatId),
-          chatName: chatName,
-          sender: isSelf ? '我' : (msg.senderNickname || chatName),
-          isSelf: isSelf,
-          timestamp: msg.createTime || msg.create_time || 0,
-          type: type,
-          content: content
-        };
-
-        data.messages.push(standardMsg);
-        msgCount++;
-        if (isSelf) selfMsgCount++;
-        if (standardMsg.timestamp > lastActive) lastActive = standardMsg.timestamp;
-      }
-
-      if (msgCount > 0) {
-        contactMap.set(String(chatId), {
-          name: chatName, platform: PLATFORMS.WECHAT, chatId: String(chatId),
-          msgCount, selfMsgCount, lastActive, isGroup: chat.isGroup || false
-        });
-      }
-    }
-
-    data.contacts = Array.from(contactMap.values());
-    updateMeta(data);
-    return data;
+    return parseWechatRaw(raw);
   }
 
   // ============================================================
@@ -441,38 +367,10 @@ export class MessageExtractor {
       const type = FEISHU_TYPE_MAP[msgType] || MESSAGE_TYPES.UNKNOWN;
       if (type === MESSAGE_TYPES.SYSTEM) continue;
 
-      // 解析内容
-      let content = '';
+      // 解析内容（使用共享解析器）
       const rawContent = msg.body?.content || msg.content || '';
-      try {
-        const parsed = JSON.parse(rawContent);
-        if (parsed.text) {
-          content = parsed.text;
-        } else if (parsed.content && Array.isArray(parsed.content)) {
-          // 富文本 post
-          const parts = [];
-          for (const para of parsed.content) {
-            if (Array.isArray(para)) {
-              for (const node of para) {
-                if (node.tag === 'text') parts.push(node.text || '');
-                else if (node.tag === 'a') parts.push(node.text || '[链接]');
-                else if (node.tag === 'at') parts.push(`@${node.user_name || ''}`);
-              }
-              parts.push('\n');
-            }
-          }
-          content = parts.join('').trim();
-        } else {
-          content = rawContent;
-        }
-      } catch {
-        content = rawContent || `[${msgType}]`;
-      }
-
-      if (type === MESSAGE_TYPES.IMAGE) content = '[图片]';
-      if (type === MESSAGE_TYPES.VOICE) content = '[语音]';
-      if (type === MESSAGE_TYPES.VIDEO) content = '[视频]';
-      if (type === MESSAGE_TYPES.EMOJI) content = '[表情]';
+      let content = parseFeishuContent(rawContent, msgType);
+      if (!content) content = rawContent || `[${msgType}]`;
 
       const sender = msg.sender?.name || msg.sender?.id || '未知';
       const isSelf = msg.sender?.id_type === 'app' || false;
@@ -710,38 +608,12 @@ export class MessageExtractor {
 
   _parseQQSegments(segments) {
     if (typeof segments === 'string') return segments;
-    if (!Array.isArray(segments)) return '';
-
-    const parts = [];
-    for (const seg of segments) {
-      switch (seg.type) {
-        case 'text': parts.push(seg.data?.text || ''); break;
-        case 'image': parts.push('[图片]'); break;
-        case 'face': case 'mface': parts.push('[表情]'); break;
-        case 'record': parts.push('[语音]'); break;
-        case 'video': parts.push('[视频]'); break;
-        case 'at': parts.push(`@${seg.data?.qq || ''}`); break;
-        case 'reply': parts.push('[回复]'); break;
-        case 'json': parts.push('[JSON消息]'); break;
-        case 'forward': parts.push('[转发消息]'); break;
-        case 'file': parts.push(`[文件] ${seg.data?.file || ''}`); break;
-        default: parts.push(`[${seg.type}]`);
-      }
-    }
-    return parts.join('');
+    return parseQQSegments(segments);
   }
 
   _detectQQMessageType(segments) {
     if (typeof segments === 'string') return MESSAGE_TYPES.TEXT;
-    if (!Array.isArray(segments) || segments.length === 0) return MESSAGE_TYPES.UNKNOWN;
-    const types = new Set(segments.map(s => s.type));
-    if (types.size === 1 && types.has('text')) return MESSAGE_TYPES.TEXT;
-    if (types.has('image')) return MESSAGE_TYPES.IMAGE;
-    if (types.has('record')) return MESSAGE_TYPES.VOICE;
-    if (types.has('video')) return MESSAGE_TYPES.VIDEO;
-    if (types.has('face') || types.has('mface')) return MESSAGE_TYPES.EMOJI;
-    if (types.has('json')) return MESSAGE_TYPES.LINK;
-    return MESSAGE_TYPES.TEXT;
+    return detectQQMessageType(segments);
   }
 
   // ============================================================

@@ -35,7 +35,6 @@ export class DataBurner {
     try {
       // 第1轮：零填充
       await this._overwrite(filePath, Buffer.alloc(fileSize, 0x00));
-      await fs.promises.writeFile(filePath, Buffer.alloc(fileSize, 0x00));
 
       // 第2轮：随机填充
       await this._overwrite(filePath, crypto.randomBytes(fileSize));
@@ -98,6 +97,10 @@ export class DataBurner {
    */
   async burn(filePaths) {
     for (const fp of filePaths) {
+      if (!fs.existsSync(fp)) {
+        this.errors.push({ file: fp, error: '文件不存在' });
+        continue;
+      }
       const stats = fs.statSync(fp);
       if (stats.isDirectory()) {
         await this.burnDirectory(fp);

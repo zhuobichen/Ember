@@ -216,10 +216,14 @@ ${this._formatYearlySamples(yearlySamples)}`;
     });
 
     if (!response.ok) {
-      throw new Error(`DeepSeek API 错误: ${response.status} ${response.statusText}`);
+      const errText = await response.text().catch(() => '');
+      throw new Error(`DeepSeek API 错误: ${response.status} ${response.statusText}${errText ? ' - ' + errText.substring(0, 200) : ''}`);
     }
 
     const data = await response.json();
+    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+      throw new Error('DeepSeek API 返回异常结构: ' + JSON.stringify(data).substring(0, 200));
+    }
     return data.choices[0].message.content;
   }
 
@@ -242,10 +246,14 @@ ${this._formatYearlySamples(yearlySamples)}`;
     });
 
     if (!response.ok) {
-      throw new Error(`Claude API 错误: ${response.status} ${response.statusText}`);
+      const errText = await response.text().catch(() => '');
+      throw new Error(`Claude API 错误: ${response.status} ${response.statusText}${errText ? ' - ' + errText.substring(0, 200) : ''}`);
     }
 
     const data = await response.json();
+    if (!data.content || !data.content[0] || !data.content[0].text) {
+      throw new Error('Claude API 返回异常结构: ' + JSON.stringify(data).substring(0, 200));
+    }
     return data.content[0].text;
   }
 

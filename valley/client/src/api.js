@@ -48,13 +48,18 @@ export const api = {
   // 纪念碑
   getMonuments: (page = 1) => request(`/monuments?page=${page}`),
   getMonument: (id, answer) => request(`/monuments/${id}${answer ? `?answer=${encodeURIComponent(answer)}` : ''}`),
-  uploadMonument: (formData) => {
+  uploadMonument: async (formData) => {
     const token = getToken();
-    return fetch(`${API_BASE}/monuments`, {
+    const res = await fetch(`${API_BASE}/monuments`, {
       method: 'POST',
       headers: token ? { 'Authorization': `Bearer ${token}` } : {},
       body: formData
-    }).then(r => r.json());
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: '上传失败' }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    return res.json();
   },
   getMyMonuments: () => request('/monuments/my/list'),
   updateMonument: (id, data) => request(`/monuments/${id}`, {

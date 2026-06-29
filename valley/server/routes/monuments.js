@@ -107,11 +107,18 @@ router.get('/:id', optionalAuth, (req, res) => {
   }
 
   // 返回完整内容
+  let parsedContent;
+  try {
+    parsedContent = JSON.parse(monument.content);
+  } catch {
+    return res.status(500).json({ error: '纪念碑数据损坏' });
+  }
+
   res.json({
     id: monument.id,
     title: monument.title,
     subtitle: monument.subtitle,
-    content: JSON.parse(monument.content),
+    content: parsedContent,
     htmlContent: monument.html_content,
     hasPuzzle: !!monument.puzzle_question,
     puzzleQuestion: isOwner ? monument.puzzle_question : undefined,
@@ -131,12 +138,16 @@ router.post('/', auth, upload.single('file'), (req, res) => {
 
   // 从上传的文件或 body 获取 monument.json 内容
   let content;
-  if (req.file) {
-    content = JSON.parse(req.file.buffer.toString('utf-8'));
-  } else if (req.body.content) {
-    content = typeof req.body.content === 'string' ? JSON.parse(req.body.content) : req.body.content;
-  } else {
-    return res.status(400).json({ error: '请上传 monument.json 文件或提供 content' });
+  try {
+    if (req.file) {
+      content = JSON.parse(req.file.buffer.toString('utf-8'));
+    } else if (req.body.content) {
+      content = typeof req.body.content === 'string' ? JSON.parse(req.body.content) : req.body.content;
+    } else {
+      return res.status(400).json({ error: '请上传 monument.json 文件或提供 content' });
+    }
+  } catch {
+    return res.status(400).json({ error: 'JSON 格式错误，请检查文件内容' });
   }
 
   const contentStr = JSON.stringify(content);
@@ -213,10 +224,13 @@ router.delete('/:id', auth, (req, res) => {
   if (!monument) return res.status(404).json({ error: '纪念碑不存在' });
   if (monument.user_id !== req.userId) return res.status(403).json({ error: '无权删除' });
 
-  // 先删除关联数据（评论、漂流瓶），再删除纪念碑，避免外键约束失败
-  db.prepare('DELETE FROM comments WHERE monument_id = ?').run(id);
-  db.prepare('DELETE FROM drift_bottles WHERE monument_id = ?').run(id);
-  db.prepare('DELETE FROM monuments WHERE id = ?').run(id);
+  // 事务删除关联数据和纪念碑
+  const deleteTransaction = db.transaction(() => {
+    db.prepare('DELETE FROM comments WHERE monument_id = ?').run(id);
+    db.prepare('DELETE FROM drift_bottles WHERE monument_id = ?').run(id);
+    db.prepare('DELETE FROM monuments WHERE id = ?').run(id);
+  });
+  deleteTransaction();
 
   res.json({ message: '纪念碑已删除' });
 });

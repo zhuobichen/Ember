@@ -55,6 +55,20 @@ app.get('*', (req, res) => {
   });
 });
 
+// 全局错误处理中间件（必须放在所有路由之后）
+app.use((err, req, res, next) => {
+  console.error('[Server Error]', err.message);
+  // multer 文件大小超限
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({ error: '文件大小超过限制 (10MB)' });
+  }
+  // JSON 解析错误
+  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: '请求体 JSON 格式错误' });
+  }
+  res.status(500).json({ error: '服务器内部错误' });
+});
+
 app.listen(PORT, () => {
   console.log(`╔══════════════════════════════════════╗`);
   console.log(`║    纪念碑谷平台已启动                ║`);
