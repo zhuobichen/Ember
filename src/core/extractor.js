@@ -45,7 +45,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { createEmptyData, updateMeta, MESSAGE_TYPES, PLATFORMS } from './schema.js';
 import { WechatDB } from './wechat-db.js';
-import { WECHAT_TYPE_MAP, FEISHU_TYPE_MAP, parseQQSegments, detectQQMessageType, parseFeishuContent } from './parsers.js';
+import { WECHAT_TYPE_MAP, FEISHU_TYPE_MAP, parseQQSegments, detectQQMessageType, parseFeishuContent, parseWechatRaw } from './parsers.js';
 
 const execAsync = promisify(exec);
 
