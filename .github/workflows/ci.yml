@@ -18,6 +18,6 @@ jobs:
       - name: Syntax check src and valley/server
         run: |
           set -e
-          for f in ; do
+          for f in $(find src valley/server -name '*.js' -type f); do
             node --check "$f"
           done
