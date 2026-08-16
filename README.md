@@ -50,6 +50,13 @@ cd Ember
 npm install
 ```
 
+> 纪念碑谷（`valley/`）是前后端两个独立 package，根目录的 `npm install` 不会安装它们。如需运行纪念碑谷，请再分别安装依赖：
+
+```bash
+cd valley/server && npm install
+cd ../client && npm install
+```
+
 ### 配置环境变量
 
 ```bash
