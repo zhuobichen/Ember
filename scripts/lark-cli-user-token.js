@@ -35,6 +35,15 @@ const CONFIG = path.join(HOME, '.lark-cli', 'config.json');
 const TOKEN = path.join(HOME, '.lark-cli', 'user-token.json');
 const REFRESH_URL = 'https://open.feishu.cn/open-apis/authen/v2/oauth/token';
 
+/**
+ * 可选的第二个令牌位置。
+ *
+ * 授权流程（device flow）常常跑在写不了 ~/.lark-cli 的进程里，令牌就会落到工作区；
+ * 而续期可能由另一侧触发，两个位置于是各有一份、新旧不一。只读正式位置会用到过期的旧令牌，
+ * 续期直接报 "refresh token has been revoked"。所以两处都读，取 expires_at 更新的那份。
+ */
+const BOOT_TOKEN = process.env.LARK_CLI_TOKEN_BOOT || '';
+
 /** 安全读 JSON（顺手去掉 PowerShell 写文件时带的 BOM） */
 function readJson(file) {
   try {
@@ -138,7 +147,17 @@ async function refreshIfNeeded(tok, app) {
 
 (async () => {
   const app = readApp();
-  const tok = readJson(TOKEN);
+
+  // 两处令牌取较新的那份（见文件头 BOOT_TOKEN 的说明）
+  const expOf = (t) => Date.parse((t && t.expires_at) || '') || 0;
+  let tok = readJson(TOKEN);
+  if (BOOT_TOKEN) {
+    const bootTok = readJson(BOOT_TOKEN);
+    if (bootTok && expOf(bootTok) > expOf(tok)) {
+      tok = bootTok;
+      persist(tok); // 顺手推回正式位置；写不进去时保持原样
+    }
+  }
 
   if (app && tok && tok.access_token) {
     const fresh = await refreshIfNeeded(tok, app);

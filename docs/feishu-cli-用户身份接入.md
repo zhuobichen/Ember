@@ -105,7 +105,7 @@ lark-cli im +chat-list --as user
 }
 ```
 
-## 6. 三个 Windows 特有的坑
+## 6. 四个 Windows 特有的坑
 
 1. **PowerShell 5.1 读无 BOM 的 UTF-8 脚本按 ANSI/GBK 解析**，脚本里的中文会把字符串引号
    顶掉，报「字符串缺少终止符」。给 PS 5.1 用的脚本要么全 ASCII，要么存成带 BOM 的 UTF-8。
@@ -114,6 +114,12 @@ lark-cli im +chat-list --as user
    静默吞掉，表现为「令牌明明在，却报 token_missing」。读 JSON 前先 `replace(/^\uFEFF/, '')`。
 3. 自制的 `.cmd` 转发用 `%*` 传参，参数里带 `&`（例如授权 URL）会被 cmd 截断；
    这类调用直接调 `.exe`，别走 shim。
+4. **令牌可能同时存在两处，只读「正式位置」会拿到过期的旧令牌**。
+   授权流程常常跑在写不了 `~/.lark-cli` 的进程里，令牌于是落到工作区的引导位置；
+   而续期可能由另一侧触发。两边各有一份时，包装层必须比较 `expires_at` 取较新的一份，
+   否则会拿着已作废的 refresh_token 去换，报
+   `The refresh token has been revoked`（实测踩过：正式位置过期 15 分钟、引导位置还有 2 小时）。
+   写回时也要两个位置都试，任一成功即可。
 
 ## 7. 重新授权
 
