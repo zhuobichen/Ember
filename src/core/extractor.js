@@ -684,12 +684,15 @@ export class MessageExtractor {
    */
   async _getQQZoneShuoshuo(uin, cookie, gtk, count) {
     const items = [];
+    const seenTids = new Set();
     let pos = 0;
     const pageSize = 20;
 
     while (items.length < count) {
+      // 分页参数是 pos：用 start= 时接口会忽略它、每次返回第一页，
+      // 结果就是同一批说说被重复抓 N 遍（实测 start=0 与 start=20 返回完全相同）
       const url = `https://user.qzone.qq.com/proxy/domain/taotao.qq.com/cgi-bin/emotion_cgi_msglist_v6?` +
-        `uin=${uin}&fhost=&qzreferrer=https%3A%2F%2Fuser.qzone.qq.com%2F${uin}&start=${pos}&num=${pageSize}&replynum=100&g_tk=${gtk}&code_version=1&format=json&need_private_comment=1`;
+        `uin=${uin}&fhost=&qzreferrer=https%3A%2F%2Fuser.qzone.qq.com%2F${uin}&pos=${pos}&num=${pageSize}&replynum=100&g_tk=${gtk}&code_version=1&format=json&need_private_comment=1`;
 
       const resp = await fetch(url, {
         headers: {
@@ -706,10 +709,18 @@ export class MessageExtractor {
 
       if (data.code !== 0 || !data.msglist || data.msglist.length === 0) break;
 
+      let added = 0;
       for (const msg of data.msglist) {
+        // 相邻页会重叠，按 tid 去重；tid 也是稳定的消息标识
+        const tid = String(msg.tid || '');
+        if (tid && seenTids.has(tid)) continue;
+        if (tid) seenTids.add(tid);
+        added++;
+
         items.push({
           type: 'shuoshuo',
           uin: uin,
+          tid,
           content: msg.content || '',
           createTime: msg.created_time || 0,
           commentCount: msg.commentlist?.length || 0,
@@ -725,7 +736,7 @@ export class MessageExtractor {
       }
 
       pos += pageSize;
-      if (data.msglist.length < pageSize) break;
+      if (data.msglist.length < pageSize || added === 0) break;
       // 避免请求过快
       await new Promise(r => setTimeout(r, 500));
     }
@@ -805,7 +816,8 @@ export class MessageExtractor {
 
         data.messages.push({
           platform: PLATFORMS.QQ,
-          messageId: `qzone_ss_${item.createTime}`,
+          // tid 是空间说说的稳定标识；退回到 createTime 时，同一秒发的两条会被当成同一条
+          messageId: `qzone_ss_${item.tid || item.createTime}`,
           chatId: 'qzone_shuoshuo',
           chatName: 'QQ空间说说',
           sender: '我',
@@ -819,7 +831,7 @@ export class MessageExtractor {
         for (const comment of (item.comments || [])) {
           data.messages.push({
             platform: PLATFORMS.QQ,
-            messageId: `qzone_cmt_${comment.time}_${comment.sender}`,
+            messageId: `qzone_cmt_${item.tid || item.createTime}_${comment.time}_${comment.sender}`,
             chatId: 'qzone_shuoshuo',
             chatName: 'QQ空间说说',
             sender: comment.name || `QQ用户${comment.sender}`,
