@@ -86,6 +86,12 @@ program
   .option('--output <dir>', '输出目录', './output')
   .option('--since <when>', '只要这个时间之后的消息（ISO 日期或秒级时间戳）')
   .option('--incremental', '增量模式：自动读 .ember-state.json 的 lastRun，本次成功后更新时间')
+  .option('--bili-history', '提取 B站观看历史（需 BILI_COOKIE）')
+  .option('--bili-fav', '提取 B站收藏夹（需 BILI_COOKIE）')
+  .option('--bili-popular', '提取 B站热门（无需登录）')
+  .option('--bili-search <kw>', '搜索 B站视频（无需登录）')
+  .option('--bili-watchtime', '提取 B站观看时长统计（需 BILI_COOKIE）')
+  .option('--bili-limit <n>', 'B站取多少条（默认 20）')
   .action(async (options) => {
     try {
       await generateMonument(options);
@@ -198,7 +204,8 @@ async function generateMonument(options) {
     dataList.push(testData);
   } else if (options.auto || options.autoWechat || options.autoFeishu || options.autoQq || options.autoQqzone
              || options.tiebaTid || options.tiebaKw || options.tiebaFile
-             || options.zhihuQid || options.zhihuFile) {
+             || options.zhihuQid || options.zhihuFile
+             || options.biliHistory || options.biliFav || options.biliPopular || options.biliSearch || options.biliWatchtime) {
     // 统一消息提取器
     console.log('  使用统一消息提取器...');
     const extractor = new MessageExtractor();
@@ -252,6 +259,18 @@ async function generateMonument(options) {
         kw: options.tiebaKw,
         file: options.tiebaFile,
         pages: options.tiebaPages ? parseInt(options.tiebaPages) : undefined
+      };
+    }
+
+    if (options.biliHistory || options.biliFav || options.biliPopular || options.biliSearch || options.biliWatchtime) {
+      config.bilibili = {
+        kind: options.biliHistory ? 'history'
+          : options.biliFav ? 'favorites'
+          : options.biliPopular ? 'popular'
+          : options.biliSearch ? 'search'
+          : 'watchtime',
+        kw: options.biliSearch,
+        limit: options.biliLimit ? parseInt(options.biliLimit) : undefined
       };
     }
 

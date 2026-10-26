@@ -1223,6 +1223,113 @@ export class MessageExtractor {
     return data;
   }
 
+  // ============================================================
+  //  B站
+  //
+  //  复用 zhaowen-mcp/bilibili 的 sources.ts（已实现 WBI 签名等），
+  //  通过它的 cli.ts 以 tsx 运行，读 JSON 回来映射成统一消息。
+  //  登录态用 BILI_COOKIE 环境变量；不给时只能取公开数据（热门/排行/搜索/视频详情）。
+  // ============================================================
+
+  /** 定位 zhaowen-mcp 仓库 */
+  _mcpRoot() {
+    const fromEnv = process.env.ZHAOWEN_MCP;
+    if (fromEnv && fs.existsSync(fromEnv)) return fromEnv;
+    const candidates = [
+      path.join(process.cwd(), '..', 'zhaowen-mcp'),
+      path.join(process.cwd(), 'zhaowen-mcp')
+    ];
+    for (const c of candidates) {
+      try { if (fs.statSync(c).isDirectory()) return c; } catch {}
+    }
+    throw new Error('找不到 zhaowen-mcp 仓库，请设置环境变量 ZHAOWEN_MCP 指向它');
+  }
+
+  /**
+   * 取 B站数据
+   * @param {Object} opts
+   * @param {string} opts.kind - history | favorites | popular | search | video | watchtime
+   * @param {number} [opts.limit]
+   * @param {string} [opts.kw] - kind=search 时的关键词
+   * @param {string} [opts.bvid] - kind=video 时的稿件号
+   */
+  async extractBilibili(opts = {}) {
+    const kind = opts.kind || 'history';
+    console.log(`  [B站] 开始提取（${kind}）...`);
+
+    const dir = path.join(this._mcpRoot(), 'bilibili');
+    const tsx = path.join(dir, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+    if (!fs.existsSync(tsx)) throw new Error(`bilibili 的 tsx 未安装: ${tsx}`);
+
+    const args = [tsx, path.join(dir, 'cli.ts'), kind];
+    if (opts.limit) args.push('--limit', String(opts.limit));
+    if (opts.kw) args.push('--kw', String(opts.kw));
+    if (opts.bvid) args.push('--bvid', String(opts.bvid));
+
+    const cmd = `"${process.execPath}" ${args.map((a) => `"${a}"`).join(' ')}`;
+    const { stdout } = await execAsync(cmd, {
+      cwd: dir,
+      maxBuffer: 32 * 1024 * 1024,
+      timeout: 180000,
+      encoding: 'utf8'
+    });
+    const payload = JSON.parse(stdout);
+    const items = payload.items || (payload.data ? [payload.data] : []);
+    if (!items.length) {
+      console.log('  [B站] 没有取到数据');
+      return null;
+    }
+
+    const chatId = `bilibili_${kind}`;
+    const chatName = {
+      history: 'B站观看历史',
+      favorites: 'B站收藏',
+      popular: 'B站热门',
+      search: `B站搜索 ${opts.kw || ''}`.trim(),
+      video: 'B站视频',
+      watchtime: 'B站观看时长'
+    }[kind] || `B站 ${kind}`;
+
+    const messages = items.map((it, i) => {
+      const time = it.viewedAt || it.pubdate || it.pubTime || 0;
+      const title = it.title || '';
+      const up = it.up || it.author || '';
+      const extra = [];
+      if (up) extra.push(`UP: ${up}`);
+      if (it.play != null) extra.push(`播放 ${it.play}`);
+      if (it.progress != null && it.duration != null) extra.push(`进度 ${it.progress}/${it.duration}`);
+      if (it.bvid) extra.push(it.bvid);
+      return {
+        platform: PLATFORMS.BILIBILI,
+        messageId: it.bvid ? `${kind}_${it.bvid}` : `${chatId}_${i + 1}`,
+        chatId,
+        chatName,
+        sender: up || 'B站',
+        isSelf: false,
+        timestamp: typeof time === 'number' ? time : Math.floor(new Date(time).getTime() / 1000) || 0,
+        type: MESSAGE_TYPES.TEXT,
+        content: [title, extra.join(' · ')].filter(Boolean).join('\n')
+      };
+    });
+
+    console.log(`  [B站] ${chatName}: ${messages.length} 条`);
+
+    const data = createEmptyData();
+    data.meta.platforms = [PLATFORMS.BILIBILI];
+    data.messages = messages;
+    const times = messages.map((m) => m.timestamp).filter((t) => t > 0);
+    data.meta.totalMessages = messages.length;
+    data.meta.timeRange = { start: Math.min(...times, 0), end: Math.max(...times, 0) };
+    data.contacts = [{
+      id: chatId,
+      name: chatName,
+      platform: PLATFORMS.BILIBILI,
+      messageCount: messages.length,
+      messageCountBySender: {}
+    }];
+    return data;
+  }
+
   async extractAll(config = {}) {
     console.log('===== 多平台消息提取 =====\n');
     const dataList = [];
@@ -1267,6 +1374,13 @@ export class MessageExtractor {
         const data = await this.extractZhihu(config.zhihu);
         if (data) { dataList.push(data); console.log(`  [知乎] ✓ ${data.messages.length} 条消息\n`); }
       } catch (err) { console.warn(`  [知乎] ✗ ${err.message}\n`); }
+    }
+
+    if (config.bilibili) {
+      try {
+        const data = await this.extractBilibili(config.bilibili);
+        if (data) { dataList.push(data); console.log(`  [B站] ✓ ${data.messages.length} 条消息\n`); }
+      } catch (err) { console.warn(`  [B站] ✗ ${err.message}\n`); }
     }
 
     if (dataList.length === 0) {
