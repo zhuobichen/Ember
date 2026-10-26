@@ -70,7 +70,10 @@ export class DataMerger {
     const seen = new Set();
     const result = [];
     for (const c of contacts) {
-      const key = `${c.platform}:${c.chatId}`;
+      // 各数据源的联系人字段不完全统一：有的叫 chatId，有的只有 id。
+      // 之前只用 c.chatId，没有该字段的源会全部退化成 "<platform>:undefined" 被去重掉，
+      // 表现为「多个源的消息都在，但联系人只剩 1 个」。
+      const key = `${c.platform}:${c.chatId || c.id}`;
       if (!seen.has(key)) {
         seen.add(key);
         result.push(c);

@@ -1150,6 +1150,7 @@ export class MessageExtractor {
     data.meta.timeRange = { start: Math.min(...times, 0), end: Math.max(...times, 0) };
     data.contacts = [{
       id: chatId,
+      chatId,
       name: chatName,
       platform: PLATFORMS.TIEBA,
       messageCount: messages.length,
@@ -1215,6 +1216,7 @@ export class MessageExtractor {
     data.meta.timeRange = { start: Math.min(...times, 0), end: Math.max(...times, 0) };
     data.contacts = [{
       id: chatId,
+      chatId,
       name: chatName,
       platform: PLATFORMS.ZHIHU,
       messageCount: messages.length,
@@ -1322,6 +1324,7 @@ export class MessageExtractor {
     data.meta.timeRange = { start: Math.min(...times, 0), end: Math.max(...times, 0) };
     data.contacts = [{
       id: chatId,
+      chatId,
       name: chatName,
       platform: PLATFORMS.BILIBILI,
       messageCount: messages.length,
@@ -1408,13 +1411,17 @@ export class MessageExtractor {
     for (const data of dataList) {
       merged.messages.push(...data.messages);
       for (const contact of data.contacts) {
-        if (!contactMap.has(contact.chatId)) {
-          contactMap.set(contact.chatId, { ...contact });
+        // 各源的联系人字段不统一：有的给 chatId，有的只给 id。
+        // 只用 chatId 会让没有该字段的源全部折叠成同一个 undefined 键，
+        // 表现为「消息都在、联系人只剩 1 个」。
+        const key = contact.chatId || contact.id || contact.name;
+        if (!contactMap.has(key)) {
+          contactMap.set(key, { ...contact });
         } else {
-          const existing = contactMap.get(contact.chatId);
-          existing.msgCount += contact.msgCount;
-          existing.selfMsgCount += contact.selfMsgCount;
-          if (contact.lastActive > existing.lastActive) existing.lastActive = contact.lastActive;
+          const existing = contactMap.get(key);
+          existing.msgCount = (existing.msgCount || 0) + (contact.msgCount || contact.messageCount || 0);
+          existing.selfMsgCount = (existing.selfMsgCount || 0) + (contact.selfMsgCount || 0);
+          if ((contact.lastActive || 0) > (existing.lastActive || 0)) existing.lastActive = contact.lastActive;
         }
       }
       for (const p of data.meta.platforms) {
