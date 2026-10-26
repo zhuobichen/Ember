@@ -84,6 +84,8 @@ program
   .option('--no-burn', '不焚毁原始数据（调试用）')
   .option('--provider <name>', 'AI 提供商: deepseek | claude', 'deepseek')
   .option('--output <dir>', '输出目录', './output')
+  .option('--since <when>', '只要这个时间之后的消息（ISO 日期或秒级时间戳）')
+  .option('--incremental', '增量模式：自动读 .ember-state.json 的 lastRun，本次成功后更新时间')
   .action(async (options) => {
     try {
       await generateMonument(options);
@@ -346,6 +348,40 @@ async function generateMonument(options) {
   console.log('\n【第2步】数据合并');
   const merger = new DataMerger();
   const unifiedData = merger.merge(dataList);
+
+  // 增量模式：只保留 lastRun 之后的消息
+  // 状态文件放在仓库根，记录每次成功生成的时间；时间戳为 0 的消息无法判断新旧，一律保留
+  const stateFile = path.join(process.cwd(), '.ember-state.json');
+  let since = null;
+  if (options.since) {
+    const raw = String(options.since);
+    const asNum = Number(raw);
+    since = Number.isFinite(asNum) && raw.trim() !== '' && !raw.includes('-')
+      ? asNum
+      : Math.floor(new Date(raw).getTime() / 1000);
+    if (!Number.isFinite(since)) throw new Error(`--since 无法解析: ${raw}`);
+  } else if (options.incremental) {
+    try {
+      const st = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
+      if (st.lastRun) since = Math.floor(new Date(st.lastRun).getTime() / 1000);
+    } catch { /* 没有状态文件就从全量开始 */ }
+  }
+
+  if (since) {
+    const before = unifiedData.messages.length;
+    unifiedData.messages = unifiedData.messages.filter((m) => !m.timestamp || m.timestamp >= since);
+    const dropped = before - unifiedData.messages.length;
+    console.log(`  增量: 保留 ${new Date(since * 1000).toLocaleString('zh-CN')} 之后的消息（丢弃 ${dropped} 条）`);
+    const ids = new Set(unifiedData.messages.map((m) => m.chatId));
+    unifiedData.contacts = (unifiedData.contacts || []).filter((c) => ids.has(c.id));
+
+    if (unifiedData.messages.length === 0) {
+      console.log('\n增量窗口内没有新消息，跳过本次生成。');
+      console.log('要看全量就去掉 --incremental；只想指定起点就用 --since <日期>。');
+      return;
+    }
+  }
+
   console.log(`  合并后: ${unifiedData.messages.length} 条消息, ${unifiedData.contacts.length} 个联系人`);
 
   // 保存合并后的数据到临时文件
@@ -406,6 +442,24 @@ async function generateMonument(options) {
   console.log('╚══════════════════════════════════════╝');
   console.log(`\n打开 ${htmlPath} 查看你的纪念碑。`);
   console.log('可将 monument.json 上传到纪念碑谷平台。');
+
+  // 记录本次成功生成的时间，供下次 --incremental 使用
+  if (options.incremental) {
+    try {
+      fs.writeFileSync(
+        path.join(process.cwd(), '.ember-state.json'),
+        JSON.stringify({
+          lastRun: new Date().toISOString(),
+          messages: unifiedData.messages.length,
+          contacts: unifiedData.contacts.length
+        }, null, 2),
+        'utf-8'
+      );
+      console.log(`\n增量状态已更新: .ember-state.json`);
+    } catch (e) {
+      console.warn(`\n增量状态写入失败: ${e.message}`);
+    }
+  }
 }
 
 /**

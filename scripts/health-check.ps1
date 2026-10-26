@@ -1,4 +1,4 @@
-# health-check.ps1 —— 全数据源健康自检
+﻿# health-check.ps1 —— 全数据源健康自检
 #
 # 一次跑完，回答「现在哪些源能用、哪些登录态快过期了」。
 # 只读检查，不抓数据（要看真实抓取是否成功，加 -Deep）。
@@ -95,7 +95,17 @@ Add-Row '飞书' $fsOk $fsDetail
 # ── 5. 浏览器通道（bsk）────────────────────────────────
 $bskOk = $false
 $bskDetail = ''
+# 解析顺序：BSK_EXE > PATH > 工作区内的 .tools\bsk（定时任务里没有 PATH 和上述环境变量，
+# 所以最后这个回落很重要）
 $bskExe = if ($env:BSK_EXE) { $env:BSK_EXE } else { (Get-Command bsk -ErrorAction SilentlyContinue).Source }
+if (-not $bskExe) {
+  $cand = Join-Path $root '.tools\bsk\bsk.exe'
+  if (Test-Path $cand) { $bskExe = $cand }
+}
+if (-not $env:BSK_HOME) {
+  $homeCand = Join-Path $root '.bsk-home'
+  if (Test-Path $homeCand) { $env:BSK_HOME = $homeCand }
+}
 if ($bskExe) {
   try {
     $st = & $bskExe browsers 2>&1 | Out-String
