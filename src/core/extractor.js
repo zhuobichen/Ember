@@ -647,11 +647,19 @@ export class MessageExtractor {
     let cookie = opts.cookie;
     let cookieSource = '参数传入';
     if (!cookie) {
-      const candidates = [
-        path.join(process.cwd(), 'qchat-cli', '.qzone-cookie'),
-        path.join(process.cwd(), '..', 'qchat-cli', '.qzone-cookie'),
-        path.join(os.homedir(), '.qzone-cookie')
+      // 优先用「按身份分开存档」的那份：qce qzone login 除了写 .qzone-cookie，
+      // 还会按 QQ 号写 .qzone-cookie.<uin>，所以多个号的空间登录态可以并存。
+      const qzDirs = [
+        path.join(process.cwd(), 'qchat-cli'),
+        path.join(process.cwd(), '..', 'qchat-cli')
       ];
+      const candidates = [];
+      if (opts.uin) {
+        for (const d of qzDirs) candidates.push(path.join(d, `.qzone-cookie.${opts.uin}`));
+      }
+      for (const d of qzDirs) candidates.push(path.join(d, '.qzone-cookie'));
+      candidates.push(path.join(os.homedir(), '.qzone-cookie'));
+
       const found = candidates.find((p) => {
         try { return fs.statSync(p).isFile(); } catch { return false; }
       });
