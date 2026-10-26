@@ -790,71 +790,114 @@ export class MessageExtractor {
   /**
    * 获取 QQ空间日志
    *
-   * 现实情况（2026-10 实测）：
-   *   - 旧的 `cgi-bin/blognew/get_blog_list` 已返回 404 空响应（JSON.parse 会炸）；
-   *   - qchat-cli 在用的 `cgi-bin/blognew/get_abs` 对本机账号返回
-   *     `{"code":-4003,"message":"空间号码错误"}`，同样拿不到列表。
-   * 所以这里不再把「日志」当成必须成功的步骤：能取就取，取不到就明确说原因并跳过，
-   * 不要让一条已经下线的接口把整个空间提取拖垮。
+   * 参数照 qzone-go（qchat-cli 的上游实现）的写法，几个关键点：
+   *   - `uin` 是「登录者自己」，目标空间放 `hostUin`；
+   *   - 参数名是 camelCase（hostUin / blogType / sortType / absType / reqInfo）；
+   *   - `reqInfo=1`；用 `reqInfo=7` 会被要求「统计年份」而返回 -4003；
+   *   - 返回是 JSONP（`_Callback({...})`），条目在 `data.list`，字段也是 camelCase。
+   * 之前用 `get_blog_list?uin=...` 那套是 404 + -4003，才误判成接口下线。
    */
   async _getQQZoneBlogs(uin, cookie, gtk, count) {
     const items = [];
-    const url = `https://user.qzone.qq.com/proxy/domain/b.qzone.qq.com/cgi-bin/blognew/get_abs?` +
-      `uin=${uin}&hostuin=${uin}&pos=0&num=${count}&format=json&g_tk=${gtk}`;
+    const pageSize = 15;
+    let pos = 0;
 
-    const resp = await fetch(url, {
-      headers: {
-        'Cookie': cookie,
-        'Referer': `https://user.qzone.qq.com/${uin}`,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
-    });
-
-    // 空间接口返回的是 GBK，直接 text() 会把中文错误信息解成乱码
-    const buf = Buffer.from(await resp.arrayBuffer());
-    let text;
-    try {
-      text = new TextDecoder('gbk').decode(buf);
-    } catch {
-      text = buf.toString('utf8');
-    }
-
-    const body = text.replace(/^_Callback\(/, '').replace(/\);?$/, '').trim();
-    if (!body) {
-      console.log('  [QQ空间] 日志接口返回空（接口已下线），跳过');
-      return items;
-    }
-
-    let data;
-    try {
-      data = JSON.parse(body);
-    } catch {
-      console.log('  [QQ空间] 日志接口返回的不是 JSON，跳过');
-      return items;
-    }
-
-    if (data.code !== 0) {
-      const reason = data.message ? ` code=${data.code} ${data.message}` : ` code=${data.code}`;
-      console.log(`  [QQ空间] 日志接口不可用（${reason.trim()}），跳过`);
-      return items;
-    }
-
-    const list = data.bloglist || data.data?.list || [];
-    for (const blog of list) {
-      items.push({
-        type: 'blog',
-        uin: uin,
-        title: blog.title || '',
-        content: blog.summary || '',
-        blogId: blog.blogid,
-        createTime: blog.pubtime || 0,
-        categoryName: blog.categoryname || '',
-        commentCount: blog.commentnum || 0,
-        readCount: blog.accessnum || 0
+    while (items.length < count) {
+      const params = new URLSearchParams({
+        hostUin: String(uin),
+        uin: String(uin),
+        blogType: '0',
+        cateName: '',
+        cateHex: '',
+        reqInfo: '1',
+        pos: String(pos),
+        num: String(pageSize),
+        sortType: '0',
+        absType: '1',
+        source: '0',
+        rand: String(Math.random()),
+        ref: 'qzone',
+        verbose: '1',
+        g_tk: String(gtk)
       });
+
+      const resp = await fetch(
+        `https://user.qzone.qq.com/proxy/domain/b.qzone.qq.com/cgi-bin/blognew/get_abs?${params}`,
+        {
+          headers: {
+            'Cookie': cookie,
+            'Referer': `https://user.qzone.qq.com/${uin}`,
+            'Origin': 'https://user.qzone.qq.com',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          }
+        }
+      );
+
+      // 空间接口返回的是 GBK，直接 text() 会把中文错误信息解成乱码
+      const buf = Buffer.from(await resp.arrayBuffer());
+      let text;
+      try {
+        text = new TextDecoder('gbk').decode(buf);
+      } catch {
+        text = buf.toString('utf8');
+      }
+
+      const body = text.replace(/^_Callback\(/, '').replace(/\);?\s*$/, '').trim();
+      if (!body) {
+        console.log('  [QQ空间] 日志接口返回空，跳过');
+        break;
+      }
+
+      let data;
+      try {
+        data = JSON.parse(body);
+      } catch {
+        console.log('  [QQ空间] 日志接口返回的不是 JSON，跳过');
+        break;
+      }
+
+      if (data.code !== 0) {
+        const reason = data.message ? ` code=${data.code} ${data.message}` : ` code=${data.code}`;
+        console.log(`  [QQ空间] 日志接口不可用（${reason.trim()}），跳过`);
+        break;
+      }
+
+      const list = data.data?.list || [];
+      for (const blog of list) {
+        items.push({
+          type: 'blog',
+          uin: uin,
+          title: blog.title || '',
+          content: blog.abstract || '',
+          blogId: blog.blogId,
+          createTime: this._parseQzDateTime(blog.pubTime),
+          categoryName: blog.cate || '',
+          commentCount: blog.commentNum || 0
+        });
+      }
+
+      if (list.length < pageSize) break;
+      pos += pageSize;
+      await new Promise((r) => setTimeout(r, 400));
     }
 
-    return items;
+    return items.slice(0, count);
+  }
+
+  /**
+   * 把空间返回的 "2012-07-11 12:09" 转成秒级时间戳
+   * @param {string} text
+   * @returns {number}
+   */
+  _parseQzDateTime(text) {
+    if (!text) return 0;
+    const m = String(text).match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+    if (!m) return 0;
+    const ms = new Date(
+      Number(m[1]), Number(m[2]) - 1, Number(m[3]),
+      Number(m[4] || 0), Number(m[5] || 0), Number(m[6] || 0)
+    ).getTime();
+    return Number.isFinite(ms) ? Math.floor(ms / 1000) : 0;
   }
 
   /**
