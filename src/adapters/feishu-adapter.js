@@ -1,12 +1,15 @@
 /**
  * 飞书适配器 - 通过 lark-cli 获取飞书消息并转换为标准格式
  *
- * lark-cli 已全局安装（npm install -g @larksuite/cli）
- * 核心命令:
- *   lark-cli im chats list --page-all          → 获取所有群聊列表
- *   lark-cli im +chat-messages-list --chat-id <id> --start <iso> --end <iso> --page-all
+ * lark-cli 需先安装并配置（npm install -g @larksuite/cli && lark-cli config init --new）
+ * 核心命令（按 lark-cli 1.0.x 实测核对）:
+ *   lark-cli im +chat-list --page-all          → 获取所有群聊列表
+ *   lark-cli im +chat-messages-list --chat-id <id> --start <iso> --end <iso> --page-all --order asc
  *                                               → 获取指定聊天消息
  *   lark-cli im +messages-search --query <kw>   → 搜索消息
+ *
+ * 注意：旧版这里写的是 `im chats list`，但 lark-cli 的 `im chats` 只有
+ * create/get/link/update 四个子命令，没有 list；排序参数也不是 --sort 而是 --order。
  *
  * 消息格式参考飞书开放平台 IM API:
  *   消息体: { message_id, chat_id, chat_name, sender{id,name}, create_time, message_type, body }
@@ -100,7 +103,7 @@ export class FeishuAdapter {
    */
   async _getChatList(outputDir) {
     const outputFile = `${outputDir}/feishu-chats-${Date.now()}.json`;
-    const cmd = `${this.cliCommand} im chats list --page-all --page-limit 50 --format json`;
+    const cmd = `${this.cliCommand} im +chat-list --page-all --page-limit 50 --format json`;
 
     try {
       const { stdout } = await execAsync(cmd, { maxBuffer: 50 * 1024 * 1024 });
@@ -131,7 +134,7 @@ export class FeishuAdapter {
       '--page-size 50',
       '--page-all',
       '--page-limit 100',
-      '--sort asc',
+      '--order asc',
       '--format json'
     ];
 
