@@ -49,6 +49,27 @@ export class FeishuAdapter {
   constructor() {
     this.platform = PLATFORMS.FEISHU;
     this.cliCommand = 'lark-cli';
+    this.selfOpenId = null;
+  }
+
+  /**
+   * 反查自己的 open_id
+   *
+   * lark-cli 返回的消息 sender 里只有 id，没有能区分"我/别人"的标记，
+   * 所以要先知道自己是谁；拿不到就退化为全部标记为非本人。
+   * @returns {Promise<string|null>}
+   */
+  async _detectSelfOpenId() {
+    try {
+      const { stdout } = await execAsync(
+        `${this.cliCommand} api GET /open-apis/authen/v1/user_info --as user`,
+        { maxBuffer: 8 * 1024 * 1024 }
+      );
+      const data = JSON.parse(stdout);
+      return data.data?.open_id || data.open_id || null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -73,6 +94,9 @@ export class FeishuAdapter {
   async export(options = {}) {
     const outputDir = options.outputDir || './temp';
     fs.mkdirSync(outputDir, { recursive: true });
+
+    // 自己是谁：判定 isSelf 要用 open_id 比对（lark-cli 的消息 sender 里只有 id）
+    this.selfOpenId = options.selfOpenId || await this._detectSelfOpenId();
 
     let chatList = [];
 
@@ -109,12 +133,13 @@ export class FeishuAdapter {
       const { stdout } = await execAsync(cmd, { maxBuffer: 50 * 1024 * 1024 });
       const data = JSON.parse(stdout);
 
-      // 飞书返回格式: { items: [{ chat_id, name, description, chat_type, ... }] }
-      const items = data.items || data.data?.items || [];
+      // lark-cli 1.0.x 的实际形状是 { ok, identity, data: { chats: [...] } }
+      // 早期版本/其它实现可能是 { items: [...] }，都兼容
+      const items = data.data?.chats || data.chats || data.items || data.data?.items || [];
       return items.map(c => ({
         chat_id: c.chat_id,
         name: c.name || c.avatar?.name || '未命名聊天',
-        chat_type: c.chat_type || 'group',
+        chat_type: c.chat_mode || c.chat_type || 'group',
         owner_id: c.owner_id,
         member_count: c.member_count || 0
       }));
@@ -147,8 +172,8 @@ export class FeishuAdapter {
       const { stdout } = await execAsync(cmd, { maxBuffer: 100 * 1024 * 1024 });
       const data = JSON.parse(stdout);
 
-      // 飞书返回格式: { items: [{ message_id, chat_id, sender, create_time, message_type, body }] }
-      const items = data.items || data.data?.items || [];
+      // lark-cli 1.0.x 的实际形状是 { ok, identity, data: { messages: [...] } }
+      const items = data.data?.messages || data.messages || data.items || data.data?.items || [];
       return items;
     } catch (err) {
       console.warn(`  [飞书] 获取聊天 ${chatId} 消息失败: ${err.message}`);
@@ -185,7 +210,10 @@ export class FeishuAdapter {
 
       // 解析发送者
       const sender = msg.sender?.name || msg.sender?.id || '未知';
-      const isSelf = msg.sender?.id_type === 'app' || false; // 简化判断
+      // 有自己 open_id 就精确比对；否则退回旧逻辑（只在明显是应用消息时判为本人）
+      const isSelf = this.selfOpenId
+        ? msg.sender?.id === this.selfOpenId
+        : msg.sender?.id_type === 'app';
 
       const chatId = msg.chat_id || '';
       const chatName = chatNameMap.get(chatId) || msg.chat_name || '飞书聊天';
