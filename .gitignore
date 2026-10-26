@@ -47,3 +47,8 @@ valley/server/data/
 !tsconfig.json
 !vite.config.*
 !eslint.config.*
+
+# 纪念碑谷运行时数据库（valley/server/db/valley.db）
+valley/server/db/*.db
+valley/server/db/*.db-shm
+valley/server/db/*.db-wal

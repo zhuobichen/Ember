@@ -265,20 +265,52 @@ pwsh -File scripts/health-check.ps1 -Deep  # 额外真抓一次贴吧/知乎
 
 ## 纪念碑谷
 
-在线展示平台，基于 Express + React + SQLite。
+在线展示平台，基于 Express + React + SQLite。你在本地生成 `monument.json`，上传后别人能浏览、
+看详情、解谜题、留漂流瓶。
+
+### 首次安装
+
+```bash
+cd valley/server && npm install --ignore-scripts   # 依赖装好即可
+cd ../client && npm install && npm run build       # 构建前端静态文件到 client/dist
+```
+
+**关于 SQLite 驱动**：`db/init.js` 默认用 `better-sqlite3`，它是原生模块，Node 24 且没有
+MSVC 构建工具时 `npm install` 会在 node-gyp 阶段失败（实测过）。所以加了回落：装不上就自动
+用 Node 内置的 `node:sqlite`（Node 22+ 自带），并补齐了 `pragma` / `transaction` /
+`lastInsertRowid` 这几个差异点。启动日志里会提示用了哪个。
+
+### 配置
+
+后端需要 `JWT_SECRET`，放在 `valley/server/.env`：
+
+```bash
+# 生成一个
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+```
+PORT=3001
+JWT_SECRET=<上面生成的值>
+```
+
+（`.env` 已在 `.gitignore` 里，不会入库。）
 
 ### 启动
 
 ```bash
-# 启动后端服务器
-npm run valley:server
+# 后端（会读 .env；不读的话 JWT_SECRET 需要在环境变量里）
+cd valley/server && node --env-file=.env index.js
 
-# 开发模式启动前端
+# 前端开发模式
 npm run valley:client
 
-# 构建前端静态文件
+# 只构建前端
 npm run valley:build
 ```
+
+打开 <http://127.0.0.1:3001> 即可。注册是**匿名**的：服务端自动生成代号（如「行者#D80C」），
+**注册时传的 alias 会被忽略**，要用响应里返回的那个代号登录。
 
 ### 功能
 

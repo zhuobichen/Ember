@@ -9,15 +9,67 @@
  * 5. drift_bottles  - 漂流瓶
  */
 
-import Database from 'better-sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dbPath = path.join(__dirname, 'valley.db');
 
-const db = new Database(dbPath);
-db.pragma('journal_mode = WAL');
+/**
+ * 数据库驱动：优先 better-sqlite3（原生模块，性能好），装不上就用 Node 内置的 node:sqlite。
+ *
+ * 为什么要有回落：better-sqlite3 是原生模块，Node 24 + 没有 MSVC 构建工具时
+ * `npm install` 会在 node-gyp 阶段失败；而 node:sqlite 从 Node 22 起内置，不用编译。
+ * 两者的 prepare/get/all/run/exec 语义基本一致，只有 pragma 和 transaction 需要补。
+ */
+async function openDb() {
+  try {
+    const { default: Database } = await import('better-sqlite3');
+    const db = new Database(dbPath);
+    db.pragma('journal_mode = WAL');
+    return db;
+  } catch (err) {
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(dbPath);
+    db.exec('PRAGMA journal_mode = WAL');
+
+    // 补上 better-sqlite3 的 db.pragma()
+    db.pragma = (stmt) => db.exec(`PRAGMA ${stmt}`);
+
+    // 补上 better-sqlite3 的 db.transaction(fn) —— 返回一个可调用函数
+    db.transaction = (fn) => (...args) => {
+      db.exec('BEGIN');
+      try {
+        const out = fn(...args);
+        db.exec('COMMIT');
+        return out;
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+    };
+
+    // lastInsertRowid 在 node:sqlite 里可能是 bigint，直接进 JSON 会抛
+    const rawPrepare = db.prepare.bind(db);
+    db.prepare = (sql) => {
+      const stmt = rawPrepare(sql);
+      const rawRun = stmt.run.bind(stmt);
+      stmt.run = (...a) => {
+        const r = rawRun(...a);
+        if (r && typeof r.lastInsertRowid === 'bigint') {
+          r.lastInsertRowid = Number(r.lastInsertRowid);
+        }
+        return r;
+      };
+      return stmt;
+    };
+
+    console.warn(`[db] better-sqlite3 不可用（${err.message.split('\n')[0]}），已回落到 node:sqlite`);
+    return db;
+  }
+}
+
+const db = await openDb();
 
 // 初始化表结构
 db.exec(`
