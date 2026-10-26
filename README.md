@@ -225,6 +225,11 @@ node src/index.js export --feishu
 这个包不是默认依赖，没装时 `node src/index.js status` 会明确标出来 —— 此时只能用开放平台
 凭证（`.env` 里的 `FEISHU_APP_ID`/`FEISHU_APP_SECRET`）或已导出的文件（`--feishu <path>`）。
 
+**注意身份区别**：应用凭证只能看到「机器人被拉进的群」；要读你自己的私聊/群聊，需要
+**用户身份**（OAuth 授权）。在 Windows 上 `lark-cli` 自身保存用户令牌会失败，绕法（外部注入
+令牌 + 自动续期转发层）以及踩过的坑，见 [docs/feishu-cli-用户身份接入.md](docs/feishu-cli-用户身份接入.md)，
+转发层模板见 [scripts/lark-cli-user-token.js](scripts/lark-cli-user-token.js)。
+
 ## 纪念碑谷
 
 在线展示平台，基于 Express + React + SQLite。
