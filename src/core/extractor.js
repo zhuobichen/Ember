@@ -1006,6 +1006,223 @@ export class MessageExtractor {
    * @param {Object} [config.qq] - QQ 配置 { baseUrl, groupId, userId, file }
    * @param {Object} [config.qqzone] - QQ空间配置 { uin, cookie, gtk, file }
    */
+  // ============================================================
+  //  贴吧 / 知乎
+  //
+  //  这两个站没有可用 CLI：贴吧 PC 接口要逐请求 sign，知乎要 x-zse-96 签名。
+  //  所以走「已登录浏览器取 HTML → 本地解析」，实现在 zhaowen-skill 仓库：
+  //    zhaowen-skill/tieba/scripts/{tieba.ps1,tieba.mjs}
+  //    zhaowen-skill/zhihu/scripts/{zhihu.ps1,zhihu.mjs}
+  //  这里只负责调用它、把结果映射成统一 schema。cookie 全程不经过本模块。
+  // ============================================================
+
+  /** 定位 zhaowen-skill 仓库（可用 ZHAOWEN_SKILLS 环境变量覆盖） */
+  _skillsRoot() {
+    const fromEnv = process.env.ZHAOWEN_SKILLS;
+    if (fromEnv && fs.existsSync(fromEnv)) return fromEnv;
+    const candidates = [
+      path.join(process.cwd(), '..', 'zhaowen-skill'),
+      path.join(process.cwd(), 'zhaowen-skill'),
+      path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', '..', '..', 'zhaowen-skill')
+    ];
+    for (const c of candidates) {
+      try { if (fs.statSync(c).isDirectory()) return c; } catch {}
+    }
+    throw new Error('找不到 zhaowen-skill 仓库，请设置环境变量 ZHAOWEN_SKILLS 指向它');
+  }
+
+  /** 跑 skill 里的脚本，把 stdout 当 JSON 解析 */
+  async _runSkillJson(scriptRelPath, args) {
+    const script = path.join(this._skillsRoot(), scriptRelPath);
+    if (!fs.existsSync(script)) throw new Error(`脚本不存在: ${script}`);
+    // 用 pwsh（PS7）：PS 5.1 会按 GBK 读无 BOM 的脚本，中文会乱
+    const shell = process.env.DSH_PWSH || 'pwsh';
+    const quoted = args.map((a) => `"${String(a).replace(/"/g, '\\"')}"`).join(' ');
+    const cmd = `"${shell}" -NoProfile -ExecutionPolicy Bypass -File "${script}" ${quoted}`;
+    const { stdout } = await execAsync(cmd, {
+      maxBuffer: 64 * 1024 * 1024,
+      timeout: 300000,
+      encoding: 'utf8'
+    });
+    const text = stdout.trim();
+    if (!text) throw new Error('脚本没有输出');
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(`脚本输出不是 JSON：${text.slice(0, 200)}`);
+    }
+  }
+
+  /** 把贴吧的相对时间（刚刚/N分钟前/N小时前/N天前/MM-DD/YYYY-MM-DD）转成秒级时间戳 */
+  _parseRelTime(text, nowSec = Math.floor(Date.now() / 1000)) {
+    const t = String(text || '').trim();
+    if (!t) return 0;
+    let m;
+    if (/^刚刚/.test(t)) return nowSec;
+    if ((m = t.match(/^(\d+)\s*秒前/))) return nowSec - Number(m[1]);
+    if ((m = t.match(/^(\d+)\s*分钟前/))) return nowSec - Number(m[1]) * 60;
+    if ((m = t.match(/^(\d+)\s*小时前/))) return nowSec - Number(m[1]) * 3600;
+    if ((m = t.match(/^(\d+)\s*天前/))) return nowSec - Number(m[1]) * 86400;
+    if ((m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/))) {
+      return Math.floor(new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime() / 1000);
+    }
+    if ((m = t.match(/^(\d{1,2})-(\d{1,2})$/))) {
+      const now = new Date();
+      let d = new Date(now.getFullYear(), Number(m[1]) - 1, Number(m[2]));
+      if (d.getTime() > Date.now()) d = new Date(now.getFullYear() - 1, Number(m[1]) - 1, Number(m[2]));
+      return Math.floor(d.getTime() / 1000);
+    }
+    return 0;
+  }
+
+  /**
+   * 提升贴吧数据
+   * @param {Object} opts
+   * @param {string} [opts.tid] - 帖子 ID（取楼层，推荐）
+   * @param {string} [opts.kw] - 吧名（取帖子列表）
+   * @param {string} [opts.file] - 已保存的 HTML，离线解析
+   * @param {number} [opts.pages] - kw 模式下翻几页
+   */
+  async extractTieba(opts = {}) {
+    console.log('  [贴吧] 开始提取...');
+    const baseline = Math.floor(Date.now() / 1000);
+    let chatId;
+    let chatName;
+    const messages = [];
+
+    if (opts.tid || opts.file) {
+      // 帖子 → 一层楼一条消息
+      const args = ['thread'];
+      if (opts.file) args.push('-Out', opts.file);
+      else args.push('-Tid', String(opts.tid));
+      args.push('-Json');
+      const data = await this._runSkillJson(path.join('tieba', 'scripts', 'tieba.ps1'), args);
+      const floors = data.楼层 || [];
+      const tid = opts.tid || data.tid || 'file';
+      chatId = `tieba_${tid}`;
+      chatName = (data.标题 || `贴吧帖子 ${tid}`).trim();
+
+      floors.forEach((f, i) => {
+        messages.push({
+          platform: PLATFORMS.TIEBA,
+          // 用序号保证唯一：楼中楼的「楼层」可能为空，只用楼层会撞 id 被去重掉
+          messageId: `${tid}_${i + 1}`,
+          chatId,
+          chatName,
+          sender: f.作者 || '匿名',
+          isSelf: false,
+          timestamp: this._parseRelTime(f.时间, baseline),
+          type: MESSAGE_TYPES.TEXT,
+          content: f.地区 ? `${f.内容}\n[${f.地区}]` : f.内容
+        });
+      });
+    } else if (opts.kw) {
+      // 吧的帖子列表 → 一条帖子一条消息
+      const args = ['posts', '-Kw', String(opts.kw), '-Json'];
+      if (opts.pages) args.push('-Pages', String(opts.pages));
+      const list = await this._runSkillJson(path.join('tieba', 'scripts', 'tieba.ps1'), args);
+      chatId = `tieba_${opts.kw}`;
+      chatName = `${opts.kw}吧`;
+      for (const t of list) {
+        messages.push({
+          platform: PLATFORMS.TIEBA,
+          messageId: `tieba_${t.tid}`,
+          chatId,
+          chatName,
+          sender: t.作者 || '',
+          isSelf: false,
+          timestamp: 0,
+          type: MESSAGE_TYPES.TEXT,
+          content: `${t.置顶 ? '[置顶]' : ''}${t.精品 ? '[精品]' : ''}${t.title}（tid=${t.tid}）`
+        });
+      }
+    } else {
+      throw new Error('贴吧提取需要 --tieba-tid 或 --tieba-kw（或用 --tieba-file 离线解析）');
+    }
+
+    console.log(`  [贴吧] ${chatName}: ${messages.length} 条`);
+
+    const data = createEmptyData();
+    data.meta.platforms = [PLATFORMS.TIEBA];
+    data.messages = messages;
+    const times = messages.map((m) => m.timestamp).filter((t) => t > 0);
+    data.meta.totalMessages = messages.length;
+    data.meta.timeRange = { start: Math.min(...times, 0), end: Math.max(...times, 0) };
+    data.contacts = [{
+      id: chatId,
+      name: chatName,
+      platform: PLATFORMS.TIEBA,
+      messageCount: messages.length,
+      messageCountBySender: {}
+    }];
+    return data;
+  }
+
+  /**
+   * 知乎问题：一条回答一条消息
+   * @param {Object} opts
+   * @param {string} [opts.qid] - 问题 ID
+   * @param {string} [opts.file] - 已保存的 HTML
+   */
+  async extractZhihu(opts = {}) {
+    console.log('  [知乎] 开始提取...');
+    const args = ['question'];
+    if (opts.file) args.push('-Out', opts.file);
+    else if (opts.qid) args.push('-Id', String(opts.qid));
+    else throw new Error('知乎提取需要 --zhihu-qid（或用 --zhihu-file 离线解析）');
+    args.push('-Json');
+
+    const q = await this._runSkillJson(path.join('zhihu', 'scripts', 'zhihu.ps1'), args);
+    const chatId = `zhihu_${q.问题ID || opts.qid || 'file'}`;
+    const chatName = (q.标题 || `知乎问题 ${q.问题ID}`).trim();
+    const messages = [];
+
+    if (q.详情) {
+      messages.push({
+        platform: PLATFORMS.ZHIHU,
+        messageId: `${chatId}_detail`,
+        chatId,
+        chatName,
+        sender: '问题',
+        isSelf: false,
+        timestamp: 0,
+        type: MESSAGE_TYPES.TEXT,
+        content: q.详情
+      });
+    }
+
+    (q.答案 || []).forEach((a, i) => {
+      messages.push({
+        platform: PLATFORMS.ZHIHU,
+        messageId: String(a.回答ID || `${chatId}_${i}`),
+        chatId,
+        chatName,
+        sender: a.答主 || '匿名',
+        isSelf: false,
+        timestamp: a.时间 ? Math.floor(new Date(a.时间).getTime() / 1000) : 0,
+        type: MESSAGE_TYPES.TEXT,
+        content: a.内容
+      });
+    });
+
+    console.log(`  [知乎] ${chatName}: ${messages.length} 条（首屏 ${(q.答案 || []).length} 条回答）`);
+
+    const data = createEmptyData();
+    data.meta.platforms = [PLATFORMS.ZHIHU];
+    data.messages = messages;
+    const times = messages.map((m) => m.timestamp).filter((t) => t > 0);
+    data.meta.totalMessages = messages.length;
+    data.meta.timeRange = { start: Math.min(...times, 0), end: Math.max(...times, 0) };
+    data.contacts = [{
+      id: chatId,
+      name: chatName,
+      platform: PLATFORMS.ZHIHU,
+      messageCount: messages.length,
+      messageCountBySender: {}
+    }];
+    return data;
+  }
+
   async extractAll(config = {}) {
     console.log('===== 多平台消息提取 =====\n');
     const dataList = [];
@@ -1036,6 +1253,20 @@ export class MessageExtractor {
         const data = await this.extractQQZone(config.qqzone);
         if (data) { dataList.push(data); console.log(`  [QQ空间] ✓ ${data.messages.length} 条消息\n`); }
       } catch (err) { console.warn(`  [QQ空间] ✗ ${err.message}\n`); }
+    }
+
+    if (config.tieba) {
+      try {
+        const data = await this.extractTieba(config.tieba);
+        if (data) { dataList.push(data); console.log(`  [贴吧] ✓ ${data.messages.length} 条消息\n`); }
+      } catch (err) { console.warn(`  [贴吧] ✗ ${err.message}\n`); }
+    }
+
+    if (config.zhihu) {
+      try {
+        const data = await this.extractZhihu(config.zhihu);
+        if (data) { dataList.push(data); console.log(`  [知乎] ✓ ${data.messages.length} 条消息\n`); }
+      } catch (err) { console.warn(`  [知乎] ✗ ${err.message}\n`); }
     }
 
     if (dataList.length === 0) {

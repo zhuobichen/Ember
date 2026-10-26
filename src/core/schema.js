@@ -60,6 +60,8 @@ export const PLATFORMS = {
   WECHAT: 'wechat',
   QQ: 'qq',
   FEISHU: 'feishu',
+  TIEBA: 'tieba',   // 百度贴吧（浏览器取页面 + 离线解析）
+  ZHIHU: 'zhihu',   // 知乎（同上，解析页面内嵌 js-initialData）
   // 网搜资料平台类型
   WEB: 'web',       // 网络公开内容（演讲、语录、文章）
   SOCIAL: 'social',  // 社交互动（问答、对话、评论）

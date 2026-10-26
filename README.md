@@ -230,6 +230,39 @@ node src/index.js export --feishu
 令牌 + 自动续期转发层）以及踩过的坑，见 [docs/feishu-cli-用户身份接入.md](docs/feishu-cli-用户身份接入.md)，
 转发层模板见 [scripts/lark-cli-user-token.js](scripts/lark-cli-user-token.js)。
 
+### 贴吧 / 知乎
+
+这两个站没有可用 CLI：贴吧 PC 接口每个请求都要 `sign`，知乎要 `x-zse-96` 签名。
+所以走「**已登录浏览器取 HTML → 本地离线解析**」，实现放在 [`zhaowen-skill`](../zhaowen-skill) 仓库
+（`tieba/scripts/`、`zhihu/scripts/`），Ember 这边只做调用和映射，**cookie 全程不经过本进程**。
+
+```bash
+# 贴吧帖子的楼层（一层楼一条消息）
+node src/index.js generate --tieba-tid 11137538751
+
+# 贴吧某吧的帖子列表（可翻页，一页 30 条）
+node src/index.js generate --tieba-kw 显卡 --tieba-pages 2
+
+# 知乎问题的首屏回答（5 条）+ 问题详情
+node src/index.js generate --zhihu-qid 2098047112466227298
+
+# 手头已有 HTML 时离线解析，不联网
+node src/index.js generate --tieba-file x.html
+node src/index.js generate --zhihu-file q.html
+```
+
+前置：`bsk`（browser-skill）在 PATH 或设 `BSK_EXE`，且浏览器里已登录对应站点。
+找不到 `zhaowen-skill` 仓库时用 `ZHAOWEN_SKILLS` 指定路径。
+
+### 数据源自检
+
+```powershell
+pwsh -File scripts/health-check.ps1        # 只读检查
+pwsh -File scripts/health-check.ps1 -Deep  # 额外真抓一次贴吧/知乎
+```
+
+一次列出 QQ、QQ空间、微信、飞书、浏览器通道、贴吧/知乎工具的状态；有异常时退出码为 1。
+
 ## 纪念碑谷
 
 在线展示平台，基于 Express + React + SQLite。

@@ -56,6 +56,12 @@ program
   .option('--auto-feishu', '自动提取飞书（需 .env 配置 FEISHU_APP_ID/SECRET）')
   .option('--auto-qq', '自动提取 QQ（需 OneBot HTTP API 运行中）')
   .option('--auto-qqzone', '自动提取 QQ空间（需 --qzone-uin；cookie 可省略，自动读 qchat-cli/.qzone-cookie）')
+  .option('--tieba-tid <id>', '提取贴吧某帖子的楼层（走 zhaowen-skill 的 tieba 脚本，用浏览器登录态）')
+  .option('--tieba-kw <name>', '提取贴吧某吧的帖子列表')
+  .option('--tieba-pages <n>', '贴吧列表翻几页（配合 --tieba-kw，一页 30 条）')
+  .option('--tieba-file <path>', '从已保存的贴吧 HTML 离线解析')
+  .option('--zhihu-qid <id>', '提取知乎某问题的首屏回答')
+  .option('--zhihu-file <path>', '从已保存的知乎 HTML 离线解析')
   .option('--wx-db <path>', '微信数据库路径（MSG0.db 或已解密的 .db）')
   .option('--wx-key <hex>', '微信数据库密钥（64位 hex）')
   .option('--wx-id <wxid>', '微信 wxid')
@@ -188,7 +194,9 @@ async function generateMonument(options) {
     console.log('  使用测试模拟数据...');
     const testData = loadTestData();
     dataList.push(testData);
-  } else if (options.auto || options.autoWechat || options.autoFeishu || options.autoQq || options.autoQqzone) {
+  } else if (options.auto || options.autoWechat || options.autoFeishu || options.autoQq || options.autoQqzone
+             || options.tiebaTid || options.tiebaKw || options.tiebaFile
+             || options.zhihuQid || options.zhihuFile) {
     // 统一消息提取器
     console.log('  使用统一消息提取器...');
     const extractor = new MessageExtractor();
@@ -232,6 +240,23 @@ async function generateMonument(options) {
       config.qqzone = {
         uin: options.qzoneUin,
         cookie: options.qzoneCookie
+      };
+    }
+
+    // 贴吧 / 知乎：走 zhaowen-skill 里的脚本（浏览器取页面 + 离线解析），不经过本进程的 cookie
+    if (options.tiebaTid || options.tiebaKw || options.tiebaFile) {
+      config.tieba = {
+        tid: options.tiebaTid,
+        kw: options.tiebaKw,
+        file: options.tiebaFile,
+        pages: options.tiebaPages ? parseInt(options.tiebaPages) : undefined
+      };
+    }
+
+    if (options.zhihuQid || options.zhihuFile) {
+      config.zhihu = {
+        qid: options.zhihuQid,
+        file: options.zhihuFile
       };
     }
 
