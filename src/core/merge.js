@@ -44,11 +44,19 @@ export class DataMerger {
 
   /**
    * 消息去重
+   *
+   * 键里带上 chatId / timestamp / sender，不只是 `平台:消息ID`：
+   * 平台给的消息 ID 并不保证全局唯一 —— qce 导出的真实数据里就出现过两条不同
+   * 消息共用同一个 messageId；微信的 localId 也是"每个会话内递增"，
+   * 跨会话同号很常见。只按 ID 去重会把真实消息当重复删掉。
+   *
+   * 两条消息只有 ID、时间、发送者都一致才认为重复（内容不参与比较，
+   * 因为同一消息在不同平台的解析结果可能不同）。
    */
   _deduplicate(messages) {
     const seen = new Set();
     return messages.filter(msg => {
-      const key = `${msg.platform}:${msg.messageId}`;
+      const key = `${msg.platform}:${msg.chatId || ''}:${msg.messageId}:${msg.timestamp}:${msg.sender}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;

@@ -139,7 +139,7 @@ node src/index.js generate --auto \
 
 ### 微信
 
-完全内置实现，不依赖 weflow-cli 或任何外部工具。
+**方式 A：内置直读数据库**（默认，不依赖任何外部工具）
 
 | 功能 | 支持情况 |
 |------|---------|
@@ -148,7 +148,7 @@ node src/index.js generate --auto \
 | 已解密数据库 | 直接打开 |
 | 联系人昵称/备注 | 自动解密 MicroMsg.db 读取 |
 | 消息类型 | 文本、图片、语音、视频、表情、链接、公众号推送 |
-| LZ4 解压 | 自动解压 CompressContent（AppMsg XML） |
+| LZ4 解压 | 自动解压 CompressContent（AppMsg XML），未安装 lz4 时只跳过压缩内容 |
 
 ```bash
 # 获取微信数据库密钥
@@ -159,9 +159,38 @@ weflow-cli dbkey --timeout 120000
 # 配置文件路径: ~/.weflow-cli/config.json
 ```
 
+**方式 B：交给 weflow-cli 导出**（需要本机装了 `weflow-cli`）
+
+```bash
+node src/index.js generate --wechat-export --wx-talker 联系人A --no-burn
+```
+
+Ember 会调用 `weflow-cli export <talker> json --json --output <目录>` 并把产物读回来。
+`raw` 契约（纯消息数组）和 `weflow-v1` 信封（`{ schema: 'weflow-message/v1', messages }`）都能读；
+信封里没有会话名，所以会话名取文件名或 `--wx-talker`。
+
 ### QQ
 
-通过 OneBot 11 HTTP API 提取，需 OneBot 客户端运行中（如 NapCat、Lagrange）。
+**方式 A：交给 qce（qchat-cli）导出**（推荐，多账号时尤其方便）
+
+```bash
+# 群聊
+node src/index.js generate --qq-export --qq-target 1109256353 --no-burn
+
+# 多账号：指定账号 + 自己的 QQ 号（用于识别哪些消息是自己发的）
+node src/index.js generate --qq-export --qq-account acc2 \
+  --qq-target 1109256353 --qq-self 1245581875 --no-burn
+
+# 或者先导出成文件，再喂给 Ember
+qce --account acc2 export 1109256353 --format json -o ./out
+node src/index.js generate --qq ./out/group_1109256353_xxx.json --qq-self 1245581875 --no-burn
+```
+
+`--qq-account` 对应 `qce account list` 里的账号名；`--qq-self` 不给时会自动跑
+`qce login --test` 反查，反查失败则只能对私聊做安全退化（群聊里不猜自己发的消息）。
+需要别的可执行名/路径时用 `--qq-cli`。
+
+**方式 B：直连 OneBot 11 HTTP API**，需 OneBot 客户端运行中（如 NapCat、Lagrange）。
 
 ```bash
 # 提取群消息
@@ -170,6 +199,7 @@ node src/index.js export --qq --qq-url http://localhost:5700 --qq-group 123456
 # 提取好友消息
 node src/index.js export --qq --qq-url http://localhost:5700 --qq-user 123456
 ```
+
 
 ### QQ空间
 
@@ -190,6 +220,10 @@ node src/index.js export --qqzone \
 ```bash
 node src/index.js export --feishu
 ```
+
+另有 `--feishu-export` 走 **lark-cli**（`@larksuite/cli`，需 `npm i -g @larksuite/cli`）。
+这个包不是默认依赖，没装时 `node src/index.js status` 会明确标出来 —— 此时只能用开放平台
+凭证（`.env` 里的 `FEISHU_APP_ID`/`FEISHU_APP_SECRET`）或已导出的文件（`--feishu <path>`）。
 
 ## 纪念碑谷
 
@@ -259,6 +293,13 @@ ember generate --celebrity su-shi
 | `--wx-db <path>` | 微信数据库路径 |
 | `--wx-key <hex>` | 微信数据库密钥（64位 hex） |
 | `--wx-4x` | 微信 4.x 格式数据库 |
+| `--wechat-export` | 交给 weflow-cli 导出（需 `--wx-talker`） |
+| `--qq-export` | 交给 qce 导出（需 `--qq-target`） |
+| `--qq-target <id>` | QQ 群号或好友 QQ 号 |
+| `--qq-account <name>` | qce 账号名（多账号时用） |
+| `--qq-self <uin>` | 自己的 QQ 号（判定 isSelf；不给则自动反查） |
+| `--qq-cli <cmd>` | qce 可执行名/路径，默认 `qce` |
+| `--weflow-cli <cmd>` | weflow-cli 可执行名/路径，默认 `weflow-cli` |
 | `--qzone-uin <qq>` | QQ空间 QQ 号 |
 | `--qzone-cookie <cookie>` | QQ空间 Cookie |
 | `--no-burn` | 不焚毁原始数据（调试用） |
@@ -276,6 +317,7 @@ Ember/
 │   │   ├── extractor.js      # 统一消息提取器（微信/QQ/飞书/QQ空间）
 │   │   ├── wechat-db.js      # 微信数据库解密读取（自包含）
 │   │   ├── parsers.js        # 共享消息解析器（类型映射/内容提取）
+│   │   ├── cli-bridge.js     # 调用 weflow-cli / qce 的桥接层（参数校验/产物定位）
 │   │   ├── analyzer.js       # AI 分析器（DeepSeek/Claude）
 │   │   ├── generator.js      # 纪念碑生成器
 │   │   ├── burner.js         # 数据焚毁器（DoD 5220.22-M）

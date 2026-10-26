@@ -29,6 +29,7 @@ import { MonumentAnalyzer } from './core/analyzer.js';
 import { MonumentGenerator } from './core/generator.js';
 import { DataBurner } from './core/burner.js';
 import { MessageExtractor } from './core/extractor.js';
+import { cliAvailable } from './core/cli-bridge.js';
 import { getCelebrityData, listCelebrities } from './datasets/index.js';
 
 program
@@ -63,6 +64,15 @@ program
   .option('--qq-url <url>', 'OneBot HTTP API 地址（默认 http://localhost:5700）')
   .option('--qq-group <id>', 'QQ 群号')
   .option('--qq-user <id>', 'QQ 好友号')
+  .option('--qq-export', '通过 qce（qchat-cli）直接导出 QQ 记录（需 --qq-target）')
+  .option('--qq-target <id>', 'QQ 群号或好友 QQ 号（配合 --qq-export）')
+  .option('--qq-account <name>', 'qce 账号名（多账号时用，见 qce account list）')
+  .option('--qq-self <uin>', '自己的 QQ 号（不给则从 qce login --test 自动探测）')
+  .option('--qq-cli <cmd>', 'qce 可执行名/路径', 'qce')
+  .option('--qq-limit <n>', 'QQ 导出条数上限（0 = 全部）')
+  .option('--wechat-export', '通过 weflow-cli 直接导出微信记录（需 --wx-talker）')
+  .option('--weflow-cli <cmd>', 'weflow-cli 可执行名/路径', 'weflow-cli')
+  .option('--wechat-limit <n>', '微信导出条数上限（0 = 全部）')
   .option('--qzone-uin <qq>', 'QQ空间 QQ 号')
   .option('--qzone-cookie <cookie>', 'QQ空间登录 cookie')
   .option('--no-burn', '不焚毁原始数据（调试用）')
@@ -234,7 +244,18 @@ async function generateMonument(options) {
       filesToBurn.push(autoTempFile);
     }
   } else {
-    if (options.wechat) {
+    if (options.wechatExport) {
+      console.log('  通过 weflow-cli 导出微信数据...');
+      const adapter = new WechatAdapter();
+      const data = await adapter.export({
+        talker: options.wxTalker,
+        limit: options.wechatLimit,
+        cli: options.weflowCli,
+        outputDir: tempDir
+      });
+      dataList.push(data);
+      console.log(`    ✓ ${data.messages.length} 条消息, ${data.contacts.length} 个联系人`);
+    } else if (options.wechat) {
       console.log('  加载微信数据...');
       const adapter = new WechatAdapter();
       const data = await adapter.load(options.wechat);
@@ -243,10 +264,23 @@ async function generateMonument(options) {
       console.log(`    ✓ ${data.messages.length} 条消息, ${data.contacts.length} 个联系人`);
     }
 
-    if (options.qq) {
+    if (options.qqExport) {
+      console.log('  通过 qce 导出 QQ 数据...');
+      const adapter = new QQAdapter();
+      const data = await adapter.export({
+        target: options.qqTarget,
+        account: options.qqAccount,
+        selfId: options.qqSelf,
+        limit: options.qqLimit,
+        cli: options.qqCli,
+        outputDir: tempDir
+      });
+      dataList.push(data);
+      console.log(`    ✓ ${data.messages.length} 条消息, ${data.contacts.length} 个联系人`);
+    } else if (options.qq) {
       console.log('  加载 QQ 数据...');
       const adapter = new QQAdapter();
-      const data = await adapter.load(options.qq);
+      const data = await adapter.load(options.qq, { selfId: options.qqSelf });
       dataList.push(data);
       filesToBurn.push(options.qq);
       console.log(`    ✓ ${data.messages.length} 条消息, ${data.contacts.length} 个联系人`);
@@ -567,6 +601,9 @@ async function checkStatus() {
   console.log('  用法:');
   console.log('    --wx-db <路径> --wx-key <64位hex> [--wx-4x] [--wx-id <wxid>]');
   console.log('    或从已导出文件: --wechat <path.json>');
+  const weflowOk = await cliAvailable('weflow-cli');
+  console.log(`  ${weflowOk ? '✓' : '✗'} weflow-cli ${weflowOk ? '可用（--wechat-export 走它的导出链路）' : '不可用（npm i -g weflow-cli）'}`);
+  console.log('    或让 weflow-cli 直接导出: --wechat-export --wx-talker <wxid|昵称>');
 
   // 2. 飞书
   console.log('\n【飞书】');
@@ -579,13 +616,21 @@ async function checkStatus() {
     console.log('  方式1: 在 .env 中配置 FEISHU_APP_ID 和 FEISHU_APP_SECRET');
     console.log('  方式2: 从已导出文件加载 (--feishu <path>)');
   }
+  const larkOk = await cliAvailable('lark-cli');
+  console.log(`  ${larkOk ? '✓' : '✗'} lark-cli ${larkOk ? '可用（--feishu-export 走它）' : '不可用（npm i -g @larksuite/cli）——没有它就只能用上面的 API 凭证或导出文件'}`);
 
   // 3. QQ
   console.log('\n【QQ 聊天】');
-  console.log('  需要 OneBot HTTP API 客户端运行中（如 NapCat / Lagrange / go-cqhttp）');
-  console.log('  默认地址: http://localhost:5700');
-  console.log('  用法: --auto-qq --qq-group <群号> 或 --qq-user <QQ号>');
-  console.log('  也可从已导出文件加载 (--qq <path>)');
+  const qceOk = await cliAvailable('qce');
+  console.log(`  ${qceOk ? '✓' : '✗'} qce（qchat-cli）${qceOk ? '可用' : '不可用'}`);
+  if (qceOk) {
+    console.log('  用法（推荐，走 qce 导出）:');
+    console.log('    --qq-export --qq-target <群号|QQ号> [--qq-account <账号名>] [--qq-self <自己QQ号>]');
+    console.log('  多账号: qce account list 看有哪些账号，--qq-account 指定');
+  }
+  console.log('  也可走 OneBot HTTP API（直接连 NapCat）:');
+  console.log('    --auto-qq --qq-url http://127.0.0.1:3000 --qq-group <群号>');
+  console.log('  或从已导出文件加载 (--qq <path>)');
 
   // 4. QQ空间
   console.log('\n【QQ空间】');

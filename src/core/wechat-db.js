@@ -30,7 +30,29 @@ import { existsSync, readFileSync, readdirSync, unlinkSync, mkdirSync, writeFile
 import { join, basename, dirname } from 'path';
 import os from 'os';
 import { DatabaseSync } from 'node:sqlite';
-import lz4 from 'lz4';
+import { createRequire } from 'module';
+
+// lz4 是原生模块：没装、或装的是别的平台的二进制时，不应该让整个 CLI 起不来。
+// 只有真要解压压缩消息（图片等）时才需要它，因此改成用到再加载。
+const requireNative = createRequire(import.meta.url);
+let lz4Module = null;
+let lz4LoadTried = false;
+
+/**
+ * 懒加载 lz4；不可用时返回 null
+ * @returns {object|null}
+ */
+function loadLz4() {
+  if (!lz4LoadTried) {
+    lz4LoadTried = true;
+    try {
+      lz4Module = requireNative('lz4');
+    } catch {
+      lz4Module = null;
+    }
+  }
+  return lz4Module;
+}
 
 const PAGE_SIZE = 4096;
 const KEY_SIZE = 32;
@@ -524,6 +546,8 @@ export class WechatDB {
   _decompressLZ4(data) {
     const buf = this._toBuffer(data);
     if (!buf) return null;
+    const lz4 = loadLz4();
+    if (!lz4) return null;   // 没有 lz4 就跳过压缩内容，不影响文本消息
     try {
       const outBuf = Buffer.alloc(buf.length * 256);
       const size = lz4.decodeBlock(buf, outBuf);
