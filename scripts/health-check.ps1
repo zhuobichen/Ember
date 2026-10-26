@@ -125,6 +125,24 @@ foreach ($name in 'tieba', 'zhihu') {
   Add-Row ("{0} 工具" -f $name) $ok $(if ($ok) { '脚本就位 + 浏览器通道正常' } elseif (-not (Test-Path $script)) { '脚本缺失' } else { '浏览器通道不可用' })
 }
 
+# ── 6b. B站（复用 zhaowen-mcp/bilibili）──────────────────
+$biliDir = Join-Path $root 'zhaowen-mcp\bilibili'
+$biliOk = (Test-Path (Join-Path $biliDir 'cli.ts')) -and (Test-Path (Join-Path $biliDir 'node_modules\tsx'))
+$biliDetail = if (-not (Test-Path (Join-Path $biliDir 'cli.ts'))) { 'cli.ts 缺失' }
+  elseif (-not (Test-Path (Join-Path $biliDir 'node_modules\tsx'))) { 'tsx 未安装（npm i）' }
+  elseif ($env:BILI_COOKIE) { '就位；BILI_COOKIE 已设（可读历史/收藏）' }
+  else { '就位；未设 BILI_COOKIE（仅公开数据）' }
+Add-Row 'B站 工具' $biliOk $biliDetail
+
+# ── 6c. 小红书（依赖本机引擎，未接入）────────────────────
+$xhsOk = $false
+$xhsDetail = '未接入：其 MCP 只是代理，需要本机 18060 端口的引擎服务'
+try {
+  $probe = Test-NetConnection -ComputerName 127.0.0.1 -Port 18060 -InformationLevel Quiet -WarningAction SilentlyContinue
+  if ($probe) { $xhsOk = $true; $xhsDetail = '引擎在 18060 已监听（可接入）' }
+} catch { }
+Add-Row '小红书' $xhsOk $xhsDetail
+
 # ── 7. 深度检查：真抓一次 ───────────────────────────────
 if ($Deep -and $bskOk) {
   foreach ($c in @(
@@ -149,6 +167,6 @@ foreach ($r in $rows) {
 }
 Write-Host ('─' * 78)
 
-$fail = ($rows | Where-Object { $_.状态 -ne 'OK' }).Count
+$fail = @($rows | Where-Object { $_.状态 -ne 'OK' }).Count
 if ($fail -eq 0) { Write-Host '  全部正常' -ForegroundColor Green; exit 0 }
 else { Write-Host ("  {0} 项异常" -f $fail) -ForegroundColor Yellow; exit 1 }
