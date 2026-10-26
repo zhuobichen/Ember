@@ -41,6 +41,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { createEmptyData, updateMeta, MESSAGE_TYPES, PLATFORMS } from './schema.js';
@@ -641,12 +642,36 @@ export class MessageExtractor {
     }
 
     // 方式2：通过 QQ空间 HTTP API 提取
-    if (!opts.uin || !opts.cookie) {
-      throw new Error('QQ空间提取需要 uin（QQ号）和 cookie 参数，或 file 参数从已导出文件加载');
+    // cookie 可以不给：qce qzone login 会把登录态写到 qchat-cli/.qzone-cookie，
+    // 这里按常见位置自动找一次，省得每次手工复制（cookie 很长）
+    let cookie = opts.cookie;
+    let cookieSource = '参数传入';
+    if (!cookie) {
+      const candidates = [
+        path.join(process.cwd(), 'qchat-cli', '.qzone-cookie'),
+        path.join(process.cwd(), '..', 'qchat-cli', '.qzone-cookie'),
+        path.join(os.homedir(), '.qzone-cookie')
+      ];
+      const found = candidates.find((p) => {
+        try { return fs.statSync(p).isFile(); } catch { return false; }
+      });
+      if (found) {
+        cookie = fs.readFileSync(found, 'utf-8').trim();
+        cookieSource = found;
+      }
     }
 
+    if (!opts.uin || !cookie) {
+      throw new Error(
+        'QQ空间提取需要 uin（QQ号）+ cookie。cookie 可以让 qce 帮你生成：\n' +
+        '  cd qchat-cli && qce qzone login\n' +
+        '生成后本工具会自动读取 qchat-cli/.qzone-cookie；也可以用 --qzone-cookie 直接传。'
+      );
+    }
+    console.log(`  [QQ空间] cookie 来源: ${cookieSource}`);
+
     // 自动计算 g_tk
-    const gtk = opts.gtk || this._calcGtk(opts.cookie);
+    const gtk = opts.gtk || this._calcGtk(cookie);
     console.log(`  [QQ空间] QQ号: ${opts.uin}, g_tk: ${gtk}`);
 
     const allItems = [];
@@ -654,17 +679,26 @@ export class MessageExtractor {
     // 1. 提取说说
     try {
       console.log('  [QQ空间] 提取说说...');
-      const shuoshuo = await this._getQQZoneShuoshuo(opts.uin, opts.cookie, gtk, opts.shuoshuoCount || 100);
+      const shuoshuo = await this._getQQZoneShuoshuo(opts.uin, cookie, gtk, opts.shuoshuoCount || 100);
       console.log(`  [QQ空间] 说说: ${shuoshuo.length} 条`);
       allItems.push(...shuoshuo);
+
+      // 0 条最常见的两个原因：这个号确实没发过说说，或者网页登录态过期了。
+      // cookie 过期没有任何前置信号，只能在这里给个可操作的提示。
+      if (shuoshuo.length === 0) {
+        console.warn(`  [QQ空间] 说说 0 条（接口 code=${this._lastQzCode ?? '未知'}）`);
+        console.warn('  [QQ空间] 若之前能取到，多半是空间登录态过期了，重新扫码：');
+        console.warn('  [QQ空间]   cd qchat-cli && qce qzone login');
+      }
     } catch (err) {
       console.warn(`  [QQ空间] 说说提取失败: ${err.message}`);
+      console.warn('  [QQ空间] 若是登录态问题，重新扫码：cd qchat-cli && qce qzone login');
     }
 
-    // 2. 提取日志
+    // 2. 提取日志（接口已基本下线，失败不影响说说）
     try {
       console.log('  [QQ空间] 提取日志...');
-      const blogs = await this._getQQZoneBlogs(opts.uin, opts.cookie, gtk, opts.blogCount || 50);
+      const blogs = await this._getQQZoneBlogs(opts.uin, cookie, gtk, opts.blogCount || 50);
       console.log(`  [QQ空间] 日志: ${blogs.length} 篇`);
       allItems.push(...blogs);
     } catch (err) {
@@ -706,6 +740,7 @@ export class MessageExtractor {
       // QQ空间 API 返回的可能是 JSONP 包裹
       const jsonStr = text.replace(/^_Callback\(/, '').replace(/\);?$/, '');
       const data = JSON.parse(jsonStr);
+      this._lastQzCode = data.code;   // 0 = 正常；其它值用于提示 cookie 是否过期
 
       if (data.code !== 0 || !data.msglist || data.msglist.length === 0) break;
 
@@ -746,11 +781,18 @@ export class MessageExtractor {
 
   /**
    * 获取 QQ空间日志
+   *
+   * 现实情况（2026-10 实测）：
+   *   - 旧的 `cgi-bin/blognew/get_blog_list` 已返回 404 空响应（JSON.parse 会炸）；
+   *   - qchat-cli 在用的 `cgi-bin/blognew/get_abs` 对本机账号返回
+   *     `{"code":-4003,"message":"空间号码错误"}`，同样拿不到列表。
+   * 所以这里不再把「日志」当成必须成功的步骤：能取就取，取不到就明确说原因并跳过，
+   * 不要让一条已经下线的接口把整个空间提取拖垮。
    */
   async _getQQZoneBlogs(uin, cookie, gtk, count) {
     const items = [];
-    const url = `https://user.qzone.qq.com/proxy/domain/b.qzone.qq.com/cgi-bin/blognew/get_blog_list?` +
-      `uin=${uin}&blogtype=0&categorynum=20&num=${count}&g_tk=${gtk}&format=json`;
+    const url = `https://user.qzone.qq.com/proxy/domain/b.qzone.qq.com/cgi-bin/blognew/get_abs?` +
+      `uin=${uin}&hostuin=${uin}&pos=0&num=${count}&format=json&g_tk=${gtk}`;
 
     const resp = await fetch(url, {
       headers: {
@@ -760,13 +802,37 @@ export class MessageExtractor {
       }
     });
 
-    const text = await resp.text();
-    const jsonStr = text.replace(/^_Callback\(/, '').replace(/\);?$/, '');
-    const data = JSON.parse(jsonStr);
+    // 空间接口返回的是 GBK，直接 text() 会把中文错误信息解成乱码
+    const buf = Buffer.from(await resp.arrayBuffer());
+    let text;
+    try {
+      text = new TextDecoder('gbk').decode(buf);
+    } catch {
+      text = buf.toString('utf8');
+    }
 
-    if (data.code !== 0 || !data.data?.list) return items;
+    const body = text.replace(/^_Callback\(/, '').replace(/\);?$/, '').trim();
+    if (!body) {
+      console.log('  [QQ空间] 日志接口返回空（接口已下线），跳过');
+      return items;
+    }
 
-    for (const blog of data.data.list) {
+    let data;
+    try {
+      data = JSON.parse(body);
+    } catch {
+      console.log('  [QQ空间] 日志接口返回的不是 JSON，跳过');
+      return items;
+    }
+
+    if (data.code !== 0) {
+      const reason = data.message ? ` code=${data.code} ${data.message}` : ` code=${data.code}`;
+      console.log(`  [QQ空间] 日志接口不可用（${reason.trim()}），跳过`);
+      return items;
+    }
+
+    const list = data.bloglist || data.data?.list || [];
+    for (const blog of list) {
       items.push({
         type: 'blog',
         uin: uin,

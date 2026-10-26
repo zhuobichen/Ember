@@ -55,7 +55,7 @@ program
   .option('--auto-wechat', '自动提取微信（需 --wx-db 或 --wechat-file）')
   .option('--auto-feishu', '自动提取飞书（需 .env 配置 FEISHU_APP_ID/SECRET）')
   .option('--auto-qq', '自动提取 QQ（需 OneBot HTTP API 运行中）')
-  .option('--auto-qqzone', '自动提取 QQ空间（需 --qzone-uin 和 --qzone-cookie）')
+  .option('--auto-qqzone', '自动提取 QQ空间（需 --qzone-uin；cookie 可省略，自动读 qchat-cli/.qzone-cookie）')
   .option('--wx-db <path>', '微信数据库路径（MSG0.db 或已解密的 .db）')
   .option('--wx-key <hex>', '微信数据库密钥（64位 hex）')
   .option('--wx-id <wxid>', '微信 wxid')
@@ -74,7 +74,7 @@ program
   .option('--weflow-cli <cmd>', 'weflow-cli 可执行名/路径', 'weflow-cli')
   .option('--wechat-limit <n>', '微信导出条数上限（0 = 全部）')
   .option('--qzone-uin <qq>', 'QQ空间 QQ 号')
-  .option('--qzone-cookie <cookie>', 'QQ空间登录 cookie')
+  .option('--qzone-cookie <cookie>', 'QQ空间登录 cookie（省略则自动读 qchat-cli/.qzone-cookie）')
   .option('--no-burn', '不焚毁原始数据（调试用）')
   .option('--provider <name>', 'AI 提供商: deepseek | claude', 'deepseek')
   .option('--output <dir>', '输出目录', './output')
@@ -125,7 +125,7 @@ program
   .option('--qq-group <id>', 'QQ 群号')
   .option('--qq-user <id>', 'QQ 好友号')
   .option('--qzone-uin <qq>', 'QQ空间 QQ 号')
-  .option('--qzone-cookie <cookie>', 'QQ空间登录 cookie')
+  .option('--qzone-cookie <cookie>', 'QQ空间登录 cookie（省略则自动读 qchat-cli/.qzone-cookie）')
   .option('--output <dir>', '输出目录', './output')
   .action(async (options) => {
     try {
@@ -635,7 +635,7 @@ async function checkStatus() {
   // 4. QQ空间
   console.log('\n【QQ空间】');
   console.log('  ✓ 内置 QQ空间 HTTP API 提取器（说说 + 日志）');
-  console.log('  需要: --qzone-uin <QQ号> --qzone-cookie <浏览器cookie>');
+  console.log('  需要: --qzone-uin <QQ号>；cookie 省略时自动读 qchat-cli/.qzone-cookie');
   console.log('  cookie 获取: 浏览器登录 QQ空间 → F12 → Network → 复制 Cookie');
 
   // 5. AI API
