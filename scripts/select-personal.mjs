@@ -59,7 +59,7 @@ const isPrivate = (m) =>
 
 // 他可能被别人叫的昵称：显式指定 + 从数据里找「只出现几次、且出现在他发言附近」的名字
 const names = new Set(extraNames);
-if (names.size === 0) names.add('太子'); // 小灶群里别人对他的称呼（实测 5 次）
+if (names.size === 0) { names.add('显晟'); names.add('晟哥'); } // 实测：全名叫施显晟，实验室的人叫他晟哥；「太子」是老板的儿子，不是他
 
 const contextMin = Number(arg('context-min', '0')); // >0 时把"他发言后 N 分钟内的应答"也算进来
 
