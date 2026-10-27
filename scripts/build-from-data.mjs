@@ -27,20 +27,33 @@ const rawDir = path.join(ember, 'data', 'raw');
 const outDir = path.join(ember, 'data', 'unified');
 const withLive = process.argv.includes('--live');
 
-const listJson = (sub) => {
+const listJson = (sub, skip = []) => {
   const d = path.join(rawDir, sub);
   if (!fs.existsSync(d)) return [];
-  return fs.readdirSync(d).filter((f) => f.endsWith('.json')).map((f) => path.join(d, f));
+  return fs
+    .readdirSync(d)
+    .filter((f) => f.endsWith('.json') && !skip.includes(f))
+    .map((f) => path.join(d, f));
 };
+
+/** 微信导出的文件名是 talker id，群名要从 _names.json 里查 */
+function readWechatNames() {
+  const f = path.join(rawDir, 'wechat', '_names.json');
+  if (!fs.existsSync(f)) return {};
+  try { return JSON.parse(fs.readFileSync(f, 'utf-8')); } catch { return {}; }
+}
+const wxNames = readWechatNames();
 
 const extractor = new MessageExtractor();
 const dataList = [];
 
 // 1) 文件型源：微信 / QQ
-for (const file of listJson('wechat')) {
+for (const file of listJson('wechat', ['_names.json'])) {
   try {
-    const d = await extractor.extractWechat({ file });
-    if (d) { dataList.push(d); console.log(`  ✓ 微信 ${path.basename(file)}: ${d.messages.length} 条`); }
+    // 文件名就是 talker id，群名去 _names.json 里查
+    const talker = path.basename(file).replace(/_messages\.json$/i, '');
+    const d = await extractor.extractWechat({ file, talker, chatName: wxNames[talker] || talker });
+    if (d) { dataList.push(d); console.log(`  ✓ 微信 ${d.contacts[0]?.name || talker}: ${d.messages.length} 条`); }
   } catch (e) { console.warn(`  ✗ 微信 ${path.basename(file)}: ${e.message}`); }
 }
 
