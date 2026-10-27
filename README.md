@@ -302,6 +302,9 @@ JWT_SECRET=<上面生成的值>
 # 后端（会读 .env；不读的话 JWT_SECRET 需要在环境变量里）
 cd valley/server && node --env-file=.env index.js
 
+# 或者用启动器：后台运行、日志到 logs/valley.*.log，关掉终端也不停
+scripts\start-valley.cmd
+
 # 前端开发模式
 npm run valley:client
 
