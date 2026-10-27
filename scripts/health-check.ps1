@@ -24,6 +24,32 @@ function Add-Row($name, $ok, $detail) {
   $rows.Add([pscustomobject]@{ 数据源 = $name; 状态 = $(if ($ok) { 'OK' } else { 'FAIL' }); 详情 = $detail })
 }
 
+<#
+  带超时地跑一段脚本块。
+
+  为什么需要：自检里有些步骤会挂住（例如 bsk 守护进程没起来时，`bsk browsers` 会一直等；
+  QQ 空间 cookie 失效时 qce 会重试；lark-cli 要连外网）。只要有一处挂住，整个自检就永远不出结果
+  —— 实测跑满 400 秒还没输出。所以每个外部调用都套一层超时，超时算 FAIL，继续往下走。
+#>
+function Invoke-Timed {
+  param(
+    [scriptblock]$Block,
+    [int]$TimeoutSec = 20,
+    [object[]]$ArgList = @()
+  )
+  $job = Start-Job -ScriptBlock $Block -ArgumentList $ArgList
+  try {
+    if (Wait-Job $job -Timeout $TimeoutSec) {
+      $out = Receive-Job $job -ErrorAction SilentlyContinue | Out-String
+      return @{ ok = ($job.State -eq 'Completed'); text = $out; timeout = $false }
+    }
+    return @{ ok = $false; text = ''; timeout = $true }
+  } finally {
+    Stop-Job $job -ErrorAction SilentlyContinue
+    Remove-Job $job -Force -ErrorAction SilentlyContinue
+  }
+}
+
 # ── 1. QQ（OneBot 实例）──────────────────────────────────
 $qqOk = 0
 $qqDetail = @()
@@ -40,27 +66,33 @@ Add-Row 'QQ 消息' ($qqOk -gt 0) ("$qqOk/3 在线 — " + ($qqDetail -join ', '
 $qzoneOk = $false
 $qzoneDetail = '未检查'
 if (Test-Path (Join-Path $qchat 'dist\cli.js')) {
-  try {
-    $logins = & node (Join-Path $qchat 'dist\cli.js') qzone logins 2>&1 | Out-String
-    $uins = [regex]::Matches($logins, '\b\d{5,12}\b') | ForEach-Object { $_.Value } | Sort-Object -Unique
-    $me = & node (Join-Path $qchat 'dist\cli.js') qzone me 2>&1 | Out-String
-    $qzoneOk = $me -match '昵称'
-    $nick = ([regex]::Match($me, '昵称:\s*(\S+)')).Groups[1].Value
-    $qzoneDetail = ("存档 {0} 个 [({1})]；当前 {2}" -f $uins.Count, ($uins -join ','), $(if ($qzoneOk) { $nick } else { '不可用（cookie 可能过期，需 qce qzone login）' }))
-  } catch { $qzoneDetail = "检查失败: $($_.Exception.Message)" }
+  $cliPath = Join-Path $qchat 'dist\cli.js'
+  $r1 = Invoke-Timed -TimeoutSec 20 -Block { param($c) & node $c qzone logins 2>&1 } -ArgList @($cliPath)
+  $r2 = Invoke-Timed -TimeoutSec 20 -Block { param($c) & node $c qzone me 2>&1 } -ArgList @($cliPath)
+  $logins = $r1.text
+  $me = $r2.text
+  $uins = [regex]::Matches($logins, '\b\d{5,12}\b') | ForEach-Object { $_.Value } | Sort-Object -Unique
+  $qzoneOk = $me -match '昵称'
+  $nick = ([regex]::Match($me, '昵称:\s*(\S+)')).Groups[1].Value
+  $why = if ($r2.timeout) { '探测超时' }
+    elseif ($me -match 'Session expired') { 'cookie 已失效，需重新扫码' }
+    else { '不可用' }
+  $qzoneDetail = ("存档 {0} 个 [({1})]；当前 {2}" -f $uins.Count, ($uins -join ','), $(if ($qzoneOk) { $nick } else { $why }))
 } else { $qzoneDetail = 'qchat-cli 未构建（缺 dist/cli.js）' }
 Add-Row 'QQ 空间' $qzoneOk $qzoneDetail
 
 # ── 3. 微信（weflow-cli / 内置解密）───────────────────────
 $wxOk = $false
 $wxDetail = ''
-try {
-  $w = & weflow-cli sessions --json 2>&1 | Out-String
+$rw = Invoke-Timed -TimeoutSec 25 -Block { & weflow-cli sessions --json 2>&1 }
+if (-not $rw.timeout) {
+  $w = $rw.text
   $wxOk = $w -match '"success"\s*:\s*true'
   $wxDetail = if ($wxOk) { 'weflow-cli 可用' } else { 'weflow-cli 返回异常' }
-} catch {
-  if (Test-Path "$env:USERPROFILE\.weflow-cli\config.json") { $wxOk = $true; $wxDetail = '配置存在（weflow-cli 未在 PATH）' }
-  else { $wxDetail = 'weflow-cli 不可用且无配置' }
+} elseif (Test-Path "$env:USERPROFILE\.weflow-cli\config.json") {
+  $wxOk = $true; $wxDetail = '配置存在，但探测超时（weflow-cli 可能卡住）'
+} else {
+  $wxDetail = 'weflow-cli 探测超时且无配置'
 }
 Add-Row '微信' $wxOk $wxDetail
 
@@ -81,12 +113,13 @@ if (Test-Path $tokFile) {
       $fsDetail = ("令牌有效，剩余 {0} 分钟" -f $left)
     } else {
       $exp2 = $null
-      try {
-        $probe = & lark-cli im +chat-list --as user 2>&1 | Out-String
+      $rp = Invoke-Timed -TimeoutSec 40 -Block { & lark-cli im +chat-list --as user 2>&1 }
+      if (-not $rp.timeout) {
+        $probe = $rp.text
         $fsOk = $probe -match '"ok"\s*:\s*true'
         if ($fsOk) { $fsDetail = '已过期但刷新成功（wrapper 已续期）' }
         else { $fsDetail = ("已过期 {0} 分钟，刷新失败 — 需重新授权" -f (-$left)) }
-      } catch { $fsDetail = ("已过期 {0} 分钟，lark-cli 不可用" -f (-$left)) }
+      } else { $fsDetail = ("已过期 {0} 分钟，lark-cli 探测超时" -f (-$left)) }
     }
   } catch { $fsDetail = "token 文件解析失败: $($_.Exception.Message)" }
 } else { $fsDetail = '没有 token 文件（从未授权）' }
@@ -107,13 +140,20 @@ if (-not $env:BSK_HOME) {
   if (Test-Path $homeCand) { $env:BSK_HOME = $homeCand }
 }
 if ($bskExe) {
-  try {
-    $st = & $bskExe browsers 2>&1 | Out-String
-    $m = [regex]::Match($st, '(\w+)\s+([\d.]+)\s+([\d.]+)')
-    $cnt = (@($st -split "`n" | Where-Object { $_ -match '^\w{8}\s' })).Count
+  # 守护进程没起来时 `bsk browsers` 会一直等，必须套超时
+  $rb = Invoke-Timed -TimeoutSec 25 -Block {
+    param($exe, $bskHomeDir)
+    if ($bskHomeDir) { $env:BSK_HOME = "$bskHomeDir" }
+    & $exe browsers 2>&1
+  } -ArgList @($bskExe, $env:BSK_HOME)
+  if ($rb.timeout) {
+    $bskDetail = '探测超时（bsk 守护进程可能没起来）'
+  } else {
+    $st = $rb.text
+    $cnt = (@($st -split "`n" | Where-Object { $_ -match '^[0-9a-f]{8}\s' })).Count
     $bskOk = $cnt -gt 0
     $bskDetail = if ($bskOk) { "$cnt 个浏览器已连接" } else { '没有已连接的浏览器（扩展未连）' }
-  } catch { $bskDetail = "bsk 调用失败: $($_.Exception.Message)" }
+  }
 } else { $bskDetail = 'bsk 不在 PATH（贴吧/知乎不可用）' }
 Add-Row '浏览器通道' $bskOk $bskDetail
 
