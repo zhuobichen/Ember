@@ -78,6 +78,11 @@ export class MessageExtractor {
     if (opts.file) {
       console.log(`  [微信] 从文件加载: ${opts.file}`);
       const raw = JSON.parse(fs.readFileSync(opts.file, 'utf-8'));
+      // weflow-cli export 产出的是一个数组，字段是 senderDisplay / createTime / parsedContent，
+      // 老解析器认不出来（会把会话名和发言人都变成"未知"），这里单独处理
+      if (Array.isArray(raw) && raw.length > 0 && raw[0] && 'senderDisplay' in raw[0]) {
+        return this._parseWechatExportArray(raw, opts);
+      }
       return this._parseWechatMessages(raw);
     }
 
@@ -203,6 +208,61 @@ export class MessageExtractor {
    * 解析微信消息（weflow-cli JSON 格式 → 标准格式）
    * 委托给共享解析器 parsers.js
    */
+  /**
+   * 解析 weflow-cli export 的数组格式
+   *
+   * 每条形如 { localId, serverId, localType, createTime, isSend,
+   *           senderUsername, senderDisplay, content, rawContent, parsedContent }
+   * 会话名不在文件里，从文件名或 opts 取。
+   */
+  _parseWechatExportArray(arr, opts = {}) {
+    const data = createEmptyData();
+    data.meta.platforms = [PLATFORMS.WECHAT];
+    const base = opts.file ? path.basename(opts.file).replace(/_messages\.json$/i, '') : 'wechat';
+    const chatId = opts.talker || base;
+    const chatName = opts.chatName || chatId;
+
+    const typeOf = (lt) => ({
+      1: MESSAGE_TYPES.TEXT,
+      3: MESSAGE_TYPES.IMAGE,
+      34: MESSAGE_TYPES.VOICE,
+      43: MESSAGE_TYPES.VIDEO,
+      47: MESSAGE_TYPES.EMOJI,
+      49: MESSAGE_TYPES.LINK
+    }[lt] || MESSAGE_TYPES.TEXT);
+
+    for (const m of arr) {
+      const content = m.parsedContent || m.content || '';
+      if (!content) continue;
+      data.messages.push({
+        platform: PLATFORMS.WECHAT,
+        messageId: String(m.serverId || m.localId || ''),
+        chatId,
+        chatName,
+        sender: m.senderDisplay || m.senderUsername || '未知',
+        isSelf: Number(m.isSend) === 1,
+        timestamp: Number(m.createTime) || 0,
+        type: typeOf(Number(m.localType)),
+        content
+      });
+    }
+
+    const senders = new Set(data.messages.map((m) => m.sender));
+    data.meta.totalMessages = data.messages.length;
+    const times = data.messages.map((m) => m.timestamp).filter((t) => t > 0);
+    data.meta.timeRange = { start: Math.min(...times, 0), end: Math.max(...times, 0) };
+    data.contacts = [{
+      id: chatId,
+      chatId,
+      name: chatName,
+      platform: PLATFORMS.WECHAT,
+      messageCount: data.messages.length,
+      senderCount: senders.size,
+      messageCountBySender: {}
+    }];
+    console.log(`  [微信] ${chatName}: ${data.messages.length} 条，${senders.size} 个发言人`);
+    return data;
+  }
   _parseWechatMessages(raw) {
     return parseWechatRaw(raw);
   }
@@ -332,17 +392,57 @@ export class MessageExtractor {
   }
 
   async _extractFeishuViaLarkCLI(opts) {
-    // 通过 lark-cli 获取（fallback）
-    const args = ['lark-cli im +chat-messages-list', '--page-size 50', '--page-all', '--format json'];
-    if (opts.chatId) args.push(`--chat-id "${opts.chatId}"`);
-    if (opts.startTime) args.push(`--start "${opts.startTime}"`);
-    if (opts.endTime) args.push(`--end "${opts.endTime}"`);
-
+    // 通过 lark-cli 获取
+    //
+    // 注意：新版 lark-cli 的 +chat-messages-list **必须**带 --chat-id（或 --user-id），
+    // 不带会直接返回 invalid_argument。所以先列会话，再逐个会话拉消息。
     try {
-      const { stdout } = await execAsync(args.join(' '), { maxBuffer: 100 * 1024 * 1024, timeout: 120000 });
-      const data = JSON.parse(stdout);
-      const items = data.items || data.data?.items || [];
-      return this._parseFeishuMessages({ items, chat_list: [] });
+      const { stdout: chatOut } = await execAsync(
+        'lark-cli im +chat-list --as user --format json',
+        { maxBuffer: 32 * 1024 * 1024, timeout: 120000 }
+      );
+      const chatJson = JSON.parse(chatOut);
+      const chats = chatJson.data?.chats || chatJson.chats || [];
+      if (chats.length === 0) throw new Error('lark-cli 没有返回任何会话');
+
+      const items = [];
+      const chatList = [];
+      for (const chat of chats) {
+        const chatId = chat.chat_id || chat.open_chat_id;
+        const chatName = chat.name || chat.chat_name || '未命名聊天';
+        if (!chatId) continue;
+        if (opts.chatId && chatId !== opts.chatId) continue;
+        chatList.push({ chat_id: chatId, name: chatName });
+
+        const parts = [
+          'lark-cli im +chat-messages-list',
+          `--chat-id "${chatId}"`,
+          '--as user',
+          '--page-size 50',
+          '--page-all',
+          '--order asc',
+          '--format json'
+        ];
+        if (opts.startTime) parts.push(`--start "${opts.startTime}"`);
+        if (opts.endTime) parts.push(`--end "${opts.endTime}"`);
+
+        try {
+          const { stdout } = await execAsync(parts.join(' '), {
+            maxBuffer: 100 * 1024 * 1024,
+            timeout: 180000
+          });
+          const data = JSON.parse(stdout);
+          const list = data.data?.messages || data.items || data.data?.items || [];
+          console.log(`  [飞书] ${chatName}: ${list.length} 条`);
+          for (const m of list) {
+            items.push({ ...m, chat_id: chatId, _chat_name: chatName });
+          }
+        } catch (e) {
+          console.warn(`  [飞书] ${chatName} 拉取失败: ${String(e.message).split('\n')[0]}`);
+        }
+      }
+
+      return this._parseFeishuMessages({ items, chat_list: chatList });
     } catch (err) {
       throw new Error(`lark-cli 提取失败: ${err.message}`);
     }
