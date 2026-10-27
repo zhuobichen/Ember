@@ -531,6 +531,11 @@ export class MessageExtractor {
     if (opts.file) {
       console.log(`  [QQ] 从文件加载: ${opts.file}`);
       const raw = JSON.parse(fs.readFileSync(opts.file, 'utf-8'));
+      // qce（qchat-cli）导出的是 { session, messages: [{ sender: {id,name}, timestamp }] }，
+      // 老解析器认不出来（会出现 chatId=private_undefined、时间戳是字符串"2026/8/30 15:21:49"）
+      if (raw && raw.session && Array.isArray(raw.messages)) {
+        return this._parseQQExportFile(raw, opts);
+      }
       return this._parseQQMessages(raw);
     }
 
@@ -655,6 +660,53 @@ export class MessageExtractor {
   /**
    * 解析 QQ 消息（OneBot 11 格式 → 标准格式）
    */
+  /**
+   * 解析 qce（qchat-cli）导出的文件
+   *
+   * 结构：{ session: {type, id, name}, messages: [{ messageId, timestamp, sender: {id,name,card}, content }] }
+   * 老的 _parseQQMessages 认不出这个结构，会把会话名和发言人弄错、时间戳留成字符串。
+   */
+  _parseQQExportFile(raw, opts = {}) {
+    const data = createEmptyData();
+    data.meta.platforms = [PLATFORMS.QQ];
+    const s = raw.session || {};
+    const chatId = `${s.type || 'chat'}_${s.id || 'unknown'}`;
+    const chatName = s.name || chatId;
+    const selfId = opts.selfId ? Number(opts.selfId) : (opts.selfUserId ? Number(opts.selfUserId) : null);
+
+    for (const m of raw.messages || []) {
+      const sender = m.sender || {};
+      const content = m.content || '';
+      if (!content) continue;
+      data.messages.push({
+        platform: PLATFORMS.QQ,
+        messageId: String(m.messageId ?? m.messageSeq ?? ''),
+        chatId,
+        chatName,
+        sender: sender.card || sender.name || String(sender.id || '未知'),
+        isSelf: selfId != null && Number(sender.id) === selfId,
+        timestamp: Number(m.timestamp) || 0,
+        type: detectQQMessageType({ segments: m.segments, content }),
+        content
+      });
+    }
+
+    const senders = new Set(data.messages.map((m) => m.sender));
+    const times = data.messages.map((m) => m.timestamp).filter((t) => t > 0);
+    data.meta.totalMessages = data.messages.length;
+    data.meta.timeRange = { start: Math.min(...times, 0), end: Math.max(...times, 0) };
+    data.contacts = [{
+      id: chatId,
+      chatId,
+      name: chatName,
+      platform: PLATFORMS.QQ,
+      messageCount: data.messages.length,
+      senderCount: senders.size,
+      messageCountBySender: {}
+    }];
+    console.log(`  [QQ] ${chatName}: ${data.messages.length} 条，${senders.size} 个发言人`);
+    return data;
+  }
   _parseQQMessages(raw) {
     const data = createEmptyData();
     data.meta.platforms = [PLATFORMS.QQ];

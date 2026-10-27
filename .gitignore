@@ -52,3 +52,9 @@ valley/server/data/
 valley/server/db/*.db
 valley/server/db/*.db-shm
 valley/server/db/*.db-wal
+# 导出数据（个人数据，一律不入库）
+data/raw/
+data/unified/
+data/analysis/
+data/output/
+!data/README.md
