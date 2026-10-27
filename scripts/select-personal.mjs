@@ -8,7 +8,7 @@
  * 规则（可用参数关掉/调整）：
  *   A. 他本人发的（isSelf）
  *   B. 一对一会话的全部消息（对方的每句话都是对他说的），排除机器人/助手
- *   C. 群聊里 @ 他的消息（昵称白名单，默认从数据里统计，可用 --names 指定）
+ *   C. 群聊里提到他的消息（昵称白名单：--names 或环境变量 PERSONAL_NAMES，不进代码）
  *   D. QQ空间说说/日志（他自己的，已含在 A 内）
  *
  * 默认剔除：
@@ -59,7 +59,10 @@ const isPrivate = (m) =>
 
 // 他可能被别人叫的昵称：显式指定 + 从数据里找「只出现几次、且出现在他发言附近」的名字
 const names = new Set(extraNames);
-if (names.size === 0) { names.add('显晟'); names.add('晟哥'); } // 实测：全名叫施显晟，实验室的人叫他晟哥；「太子」是老板的儿子，不是他
+// 昵称不进代码（隐私）：从 --names 或环境变量 PERSONAL_NAMES 传，多个用逗号分隔
+if (names.size === 0 && process.env.PERSONAL_NAMES) {
+  for (const n of process.env.PERSONAL_NAMES.split(',')) { const s = n.trim(); if (s) names.add(s); }
+}
 
 const contextMin = Number(arg('context-min', '0')); // >0 时把"他发言后 N 分钟内的应答"也算进来
 
