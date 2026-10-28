@@ -147,12 +147,12 @@ if ($bskExe) {
     & $exe browsers 2>&1
   } -ArgList @($bskExe, $env:BSK_HOME)
   if ($rb.timeout) {
-    $bskDetail = '探测超时（bsk 守护进程可能没起来）'
+    $bskDetail = '探测超时：bsk 守护进程没起来。用 Start-Process 后台跑 bsk daemon start（前台会 3 秒超时）'
   } else {
     $st = $rb.text
     $cnt = (@($st -split "`n" | Where-Object { $_ -match '^[0-9a-f]{8}\s' })).Count
     $bskOk = $cnt -gt 0
-    $bskDetail = if ($bskOk) { "$cnt 个浏览器已连接" } else { '没有已连接的浏览器（扩展未连）' }
+    $bskDetail = if ($bskOk) { "$cnt 个浏览器已连接" } else { '没有已连接的浏览器：打开 Edge 并确认 browser-skill 扩展是绿的' }
   }
 } else { $bskDetail = 'bsk 不在 PATH（贴吧/知乎不可用）' }
 Add-Row '浏览器通道' $bskOk $bskDetail
