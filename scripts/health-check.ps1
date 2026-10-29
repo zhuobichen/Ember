@@ -9,7 +9,7 @@
 #
 # 退出码：0 全部正常 / 1 有源不可用
 
-param([switch]$Deep)
+param([switch]$Deep, [switch]$Fix)
 
 $ErrorActionPreference = 'Continue'
 
@@ -140,19 +140,46 @@ if (-not $env:BSK_HOME) {
   if (Test-Path $homeCand) { $env:BSK_HOME = $homeCand }
 }
 if ($bskExe) {
-  # 守护进程没起来时 `bsk browsers` 会一直等，必须套超时
-  $rb = Invoke-Timed -TimeoutSec 25 -Block {
-    param($exe, $bskHomeDir)
-    if ($bskHomeDir) { $env:BSK_HOME = "$bskHomeDir" }
-    & $exe browsers 2>&1
-  } -ArgList @($bskExe, $env:BSK_HOME)
-  if ($rb.timeout) {
-    $bskDetail = '探测超时：bsk 守护进程没起来。用 Start-Process 后台跑 bsk daemon start（前台会 3 秒超时）'
+  # 关键：守护进程没起来时，bsk 的 CLI 会**自动尝试启动它并卡住**，连 Stop-Job 都停不下来
+  # （实测自检因此挂了 7 分钟）。所以先看 daemon.json 和 pid，不健康就完全不调 bsk。
+  $daemonJson = Join-Path $env:BSK_HOME 'daemon.json'
+  $alive = $false
+  $dinfo = ''
+  if (Test-Path $daemonJson) {
+    try {
+      $d = Get-Content $daemonJson -Raw | ConvertFrom-Json
+      $proc = Get-Process -Id $d.pid -ErrorAction SilentlyContinue
+      $alive = [bool]$proc
+      $dinfo = "pid=$($d.pid) 端口=$($d.ws_port)"
+    } catch { $alive = $false }
+  }
+
+  if (-not $alive -and $Fix) {
+    # -Fix：只触发启动，不在同一次里等待验证
+    # （实测在同一个进程里既启动又等待/查询 bsk，会卡住不返回）
+    Write-Host '  [fix] 已触发 bsk 守护进程启动（后台）'
+    Start-Process -FilePath $bskExe -ArgumentList @('daemon', 'start') -WindowStyle Hidden | Out-Null
+    $fixPending = $true
+  }
+
+  if ($fixPending) {
+    $bskDetail = '刚触发启动，本次不验证（再跑一次自检即可确认）'
+  } elseif (-not $alive) {
+    $bskDetail = '守护进程没在跑（' + $daemonJson + ' 里没有活着的 pid）。用 -Fix 自动拉起，或手动：Start-Process bsk -ArgumentList "daemon","start"'
   } else {
-    $st = $rb.text
-    $cnt = (@($st -split "`n" | Where-Object { $_ -match '^[0-9a-f]{8}\s' })).Count
-    $bskOk = $cnt -gt 0
-    $bskDetail = if ($bskOk) { "$cnt 个浏览器已连接" } else { '没有已连接的浏览器：打开 Edge 并确认 browser-skill 扩展是绿的' }
+    $rb = Invoke-Timed -TimeoutSec 25 -Block {
+      param($exe, $bskHomeDir)
+      if ($bskHomeDir) { $env:BSK_HOME = "$bskHomeDir" }
+      & $exe browsers 2>&1
+    } -ArgList @($bskExe, $env:BSK_HOME)
+    if ($rb.timeout) {
+      $bskDetail = "守护进程在（$dinfo）但探测超时"
+    } else {
+      $st = $rb.text
+      $cnt = (@($st -split "`n" | Where-Object { $_ -match '^[0-9a-f]{8}\s' })).Count
+      $bskOk = $cnt -gt 0
+      $bskDetail = if ($bskOk) { "$cnt 个浏览器已连接（$dinfo）" } else { "守护进程在（$dinfo）但没有浏览器连：打开 Edge 并确认 browser-skill 扩展是绿的" }
+    }
   }
 } else { $bskDetail = 'bsk 不在 PATH（贴吧/知乎不可用）' }
 Add-Row '浏览器通道' $bskOk $bskDetail
@@ -183,6 +210,21 @@ try {
 } catch { }
 Add-Row '小红书' $xhsOk $xhsDetail
 
+# ── 6d. 纪念碑谷服务（端口 3001）──────────────────────────
+$valleyPort = 3001
+$listening = ([System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | Select-Object -ExpandProperty Port -Unique) -contains $valleyPort
+$vFixFired = $false
+if (-not $listening -and $Fix) {
+  $starter = Join-Path $here 'start-valley.cmd'
+  if (Test-Path $starter) {
+    Write-Host '  [fix] 已触发纪念碑谷启动（后台）'
+    Start-Process -FilePath $starter -WindowStyle Hidden | Out-Null
+    $vFixFired = $true
+  }
+}
+$vOk = $listening -or $vFixFired
+$vDetail = if ($listening) { "http://127.0.0.1:$valleyPort 在监听" } elseif ($vFixFired) { '刚触发启动，稍后访问 http://127.0.0.1:3001' } else { '没在跑（-Fix 会自动拉起，或手动 scripts\start-valley.cmd）' }
+Add-Row '纪念碑谷' $vOk $vDetail
 # ── 7. 深度检查：真抓一次 ───────────────────────────────
 if ($Deep -and $bskOk) {
   foreach ($c in @(
