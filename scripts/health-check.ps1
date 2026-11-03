@@ -155,9 +155,14 @@ if ($bskExe) {
   }
 
   if (-not $alive -and $Fix) {
-    # -Fix：只触发启动，不在同一次里等待验证
-    # （实测在同一个进程里既启动又等待/查询 bsk，会卡住不返回）
+    # -Fix：只触发启动，不在同一次里等待验证。
+    # 两个必须注意的点（都实测踩过）：
+    #   1) 不能在同一进程里既启动又查询 bsk，会卡住
+    #   2) Start-Process 必须重定向 stdout/stderr，否则子进程继承句柄，父进程会一直等
     Write-Host '  [fix] 已触发 bsk 守护进程启动（后台）'
+    # 注意：Win32_Process Create 在沙箱里会被拒绝，只能 Start-Process。
+    # 但 bsk daemon start 是**前台常驻**进程，从 agent 的调用里跑会一直等；
+    # 在用户自己的终端里跑没有这个问题。
     Start-Process -FilePath $bskExe -ArgumentList @('daemon', 'start') -WindowStyle Hidden | Out-Null
     $fixPending = $true
   }
@@ -218,7 +223,7 @@ if (-not $listening -and $Fix) {
   $starter = Join-Path $here 'start-valley.cmd'
   if (Test-Path $starter) {
     Write-Host '  [fix] 已触发纪念碑谷启动（后台）'
-    Start-Process -FilePath $starter -WindowStyle Hidden | Out-Null
+    Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', "`"$starter`"") -WindowStyle Hidden | Out-Null
     $vFixFired = $true
   }
 }
