@@ -20,8 +20,10 @@ $qchat = Join-Path $root 'qchat-cli'
 $skills = Join-Path $root 'zhaowen-skill'
 
 $rows = New-Object System.Collections.Generic.List[object]
-function Add-Row($name, $ok, $detail) {
-  $rows.Add([pscustomobject]@{ 数据源 = $name; 状态 = $(if ($ok) { 'OK' } else { 'FAIL' }); 详情 = $detail })
+function Add-Row($name, $ok, $detail, [switch]$Skip) {
+  # 三态：OK / FAIL（真问题）/ SKIP（按设计未激活，不算异常）
+  $status = if ($Skip) { 'SKIP' } elseif ($ok) { 'OK' } else { 'FAIL' }
+  $rows.Add([pscustomobject]@{ 数据源 = $name; 状态 = $status; 详情 = $detail })
 }
 
 <#
@@ -168,9 +170,11 @@ if ($bskExe) {
   }
 
   if ($fixPending) {
+    $bskSkip = $true
     $bskDetail = '刚触发启动，本次不验证（再跑一次自检即可确认）'
   } elseif (-not $alive) {
-    $bskDetail = '守护进程没在跑（' + $daemonJson + ' 里没有活着的 pid）。用 -Fix 自动拉起，或手动：Start-Process bsk -ArgumentList "daemon","start"'
+    $bskSkip = $true
+    $bskDetail = '未激活：bsk 守护进程按设计在空闲 10 分钟后自退（日志：daemon exceeded idle threshold）。要用时打开 Edge 让扩展连上即可，不算故障'
   } else {
     $rb = Invoke-Timed -TimeoutSec 25 -Block {
       param($exe, $bskHomeDir)
@@ -183,18 +187,25 @@ if ($bskExe) {
       $st = $rb.text
       $cnt = (@($st -split "`n" | Where-Object { $_ -match '^[0-9a-f]{8}\s' })).Count
       $bskOk = $cnt -gt 0
-      $bskDetail = if ($bskOk) { "$cnt 个浏览器已连接（$dinfo）" } else { "守护进程在（$dinfo）但没有浏览器连：打开 Edge 并确认 browser-skill 扩展是绿的" }
+      if (-not $bskOk) { $bskSkip = $true }
+      $bskDetail = if ($bskOk) { "$cnt 个浏览器已连接（$dinfo）" } else { "守护进程在（$dinfo）但没有浏览器连：打开 Edge 让扩展连上（不连的话守护进程 10 分钟后会自退）" }
     }
   }
 } else { $bskDetail = 'bsk 不在 PATH（贴吧/知乎不可用）' }
-Add-Row '浏览器通道' $bskOk $bskDetail
+if (-not (Test-Path variable:bskSkip)) { $bskSkip = $false }
+Add-Row '浏览器通道' $bskOk $bskDetail -Skip:$bskSkip
 
 # ── 6. 贴吧 / 知乎 脚本就位 ─────────────────────────────
 foreach ($name in 'tieba', 'zhihu') {
   $script = Join-Path $skills "$name\scripts\$name.ps1"
   $cliJs = Join-Path $skills "$name\scripts\$name.mjs"
-  $ok = (Test-Path $script) -and (Test-Path $cliJs) -and $bskOk
-  Add-Row ("{0} 工具" -f $name) $ok $(if ($ok) { '脚本就位 + 浏览器通道正常' } elseif (-not (Test-Path $script)) { '脚本缺失' } else { '浏览器通道不可用' })
+  $hasScript = (Test-Path $script) -and (Test-Path $cliJs)
+  $ok = $hasScript -and $bskOk
+  if ($hasScript -and -not $bskOk -and $bskSkip) {
+    Add-Row ("{0} 工具" -f $name) $true '脚本就位；浏览器通道未激活（打开 Edge 即可用）' -Skip
+  } else {
+    Add-Row ("{0} 工具" -f $name) $ok $(if ($ok) { '脚本就位 + 浏览器通道正常' } elseif (-not $hasScript) { '脚本缺失' } else { '浏览器通道不可用' })
+  }
 }
 
 # ── 6b. B站（复用 zhaowen-mcp/bilibili）──────────────────
@@ -249,11 +260,18 @@ Write-Host ''
 Write-Host ('数据源健康检查  {0}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 Write-Host ('─' * 78)
 foreach ($r in $rows) {
-  $color = if ($r.状态 -eq 'OK') { 'Green' } else { 'Red' }
+  $color = if ($r.状态 -eq 'OK') { 'Green' } elseif ($r.状态 -eq 'SKIP') { 'DarkGray' } else { 'Red' }
   Write-Host ('  {0,-10} {1,-6} {2}' -f $r.数据源, $r.状态, $r.详情) -ForegroundColor $color
 }
 Write-Host ('─' * 78)
 
-$fail = @($rows | Where-Object { $_.状态 -ne 'OK' }).Count
-if ($fail -eq 0) { Write-Host '  全部正常' -ForegroundColor Green; exit 0 }
-else { Write-Host ("  {0} 项异常" -f $fail) -ForegroundColor Yellow; exit 1 }
+$fail = @($rows | Where-Object { $_.状态 -eq 'FAIL' }).Count
+$skip = @($rows | Where-Object { $_.状态 -eq 'SKIP' }).Count
+if ($fail -eq 0) {
+  $msg = if ($skip -gt 0) { "  全部正常（{0} 项未激活）" -f $skip } else { '  全部正常' }
+  Write-Host $msg -ForegroundColor Green
+  exit 0
+} else {
+  Write-Host ("  {0} 项异常{1}" -f $fail, $(if ($skip -gt 0) { "、{0} 项未激活" -f $skip } else { '' })) -ForegroundColor Yellow
+  exit 1
+}
