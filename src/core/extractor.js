@@ -793,7 +793,19 @@ export class MessageExtractor {
       return this._parseQQZoneData(raw);
     }
 
-    // 方式2：通过 QQ空间 HTTP API 提取
+    // 方式2（首选）：走 qce（qchat-cli）。它有完整的空间实现（cookie、多号身份、
+    // 分页、评论），Ember 不再自己维护一套 HTTP + g_tk。
+    if (opts.uin && !opts.cookie) {
+      try {
+        const viaQce = await this._extractQQZoneViaQce(opts.uin, opts.shuoshuoCount || 100, opts.blogCount || 50);
+        if (viaQce && viaQce.length > 0) return this._parseQQZoneData(viaQce);
+        console.log('  [QQ空间] qce 没取到数据，回落到内置 HTTP');
+      } catch (e) {
+        console.warn(`  [QQ空间] qce 路径失败（${String(e.message).split('\n')[0]}），回落到内置 HTTP`);
+      }
+    }
+
+    // 方式3：内置 HTTP 实现（保留作为兜底）
     // cookie 可以不给：qce qzone login 会把登录态写到 qchat-cli/.qzone-cookie，
     // 这里按常见位置自动找一次，省得每次手工复制（cookie 很长）
     let cookie = opts.cookie;
@@ -1069,6 +1081,95 @@ export class MessageExtractor {
   /**
    * 解析 QQ空间数据为标准格式
    */
+  /** 定位 qchat-cli 的 CLI 入口 */
+  _qchatCli() {
+    const fromEnv = process.env.QCHAT_CLI;
+    if (fromEnv && fs.existsSync(fromEnv)) return fromEnv;
+    const cands = [
+      path.join(process.cwd(), 'qchat-cli', 'dist', 'cli.js'),
+      path.join(process.cwd(), '..', 'qchat-cli', 'dist', 'cli.js')
+    ];
+    for (const c of cands) {
+      try { if (fs.statSync(c).isFile()) return c; } catch {}
+    }
+    throw new Error('找不到 qchat-cli/dist/cli.js（可用 QCHAT_CLI 指定）');
+  }
+
+  /** 跑一条 qce 命令并解析 JSON 输出 */
+  async _runQceJson(args) {
+    const cli = this._qchatCli();
+    const cmd = `"${process.execPath}" "${cli}" ${args.map((a) => `"${String(a).replace(/"/g, '\\"')}"`).join(' ')}`;
+    const { stdout } = await execAsync(cmd, { maxBuffer: 32 * 1024 * 1024, timeout: 120000, encoding: 'utf8' });
+    const text = stdout.trim();
+    const start = text.indexOf('{');
+    if (start < 0) throw new Error(`qce 输出不是 JSON: ${text.slice(0, 120)}`);
+    return JSON.parse(text.slice(start));
+  }
+
+  /**
+   * 通过 qce（qchat-cli）取 QQ 空间内容
+   *
+   * 换成这条路的原因：空间的分页、cookie 轮换、多号身份这些细节 qchat-cli 已经做对了，
+   * Ember 里那套自建 HTTP 是重复实现，字段还容易对不上。
+   * 返回的 items 结构保持与 _parseQQZoneData 期望的一致（type=shuoshuo / blog）。
+   */
+  async _extractQQZoneViaQce(uin, shuoshuoCount, blogCount) {
+    const items = [];
+
+    // 多号并存时先切到目标身份（没有该号存档时忽略失败，走当前身份）
+    try {
+      await execAsync(`"${process.execPath}" "${this._qchatCli()}" qzone use ${uin}`, { timeout: 20000, encoding: 'utf8' });
+    } catch { }
+
+    // 说说（分页）
+    const pageSize = 20;
+    let pos = 0;
+    let got = 0;
+    while (got < shuoshuoCount) {
+      const page = await this._runQceJson(['qzone', 'feeds', String(uin), '--num', String(pageSize), '--pos', String(pos), '--json']);
+      const list = page.items || [];
+      for (const f of list) {
+        const pics = f.pic || f.pictures || [];
+        items.push({
+          type: 'shuoshuo',
+          tid: f.tid,
+          content: String(f.content || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
+          createTime: Number(f.createTime || f.created_time) || 0,
+          pictures: Array.isArray(pics) ? pics : [],
+          comments: (f.commentlist || f.comments || []).map((c) => ({
+            time: Number(c.createTime || c.postTime || c.time) || 0,
+            sender: c.uin || c.sender || '',
+            name: c.name || c.nickname || (c.poster && c.poster.name) || '',
+            content: String(c.content || '').replace(/<[^>]+>/g, ' ').trim()
+          }))
+        });
+      }
+      got += list.length;
+      pos += pageSize;
+      if (list.length < pageSize) break;
+    }
+
+    // 日志
+    try {
+      const blogs = await this._runQceJson(['qzone', 'blogs', String(uin), '--num', String(blogCount), '--json']);
+      for (const b of blogs.items || []) {
+        items.push({
+          type: 'blog',
+          blogId: b.blogId,
+          title: b.title || '',
+          content: b.abstract || b.summary || '',
+          createTime: this._parseQzDateTime(b.pubTime),
+          categoryName: b.cate || '',
+          commentCount: b.commentNum || 0
+        });
+      }
+    } catch (e) {
+      console.log(`  [QQ空间] 日志跳过: ${String(e.message).split('\n')[0]}`);
+    }
+
+    console.log(`  [QQ空间] qce 取到 ${items.length} 条（说说 ${items.filter((i) => i.type === 'shuoshuo').length}、日志 ${items.filter((i) => i.type === 'blog').length}）`);
+    return items;
+  }
   _parseQQZoneData(raw) {
     const data = createEmptyData();
     data.meta.platforms = [PLATFORMS.QQ];
@@ -1128,16 +1229,19 @@ export class MessageExtractor {
     }
 
     // 构建联系人
+    // 注意：messageCount 是统一 schema 里的字段，msgCount 是早期遗留名，
+    // 两个都写，免得下游（统计、valley 导入）读到一个 undefined
     const contactMap = new Map();
     for (const msg of data.messages) {
       if (!contactMap.has(msg.chatId)) {
         contactMap.set(msg.chatId, {
           name: msg.chatName, platform: PLATFORMS.QQ, chatId: msg.chatId,
-          msgCount: 0, selfMsgCount: 0, lastActive: 0, isGroup: false
+          msgCount: 0, messageCount: 0, selfMsgCount: 0, lastActive: 0, isGroup: false
         });
       }
       const c = contactMap.get(msg.chatId);
       c.msgCount++;
+      c.messageCount++;
       if (msg.isSelf) c.selfMsgCount++;
       if (msg.timestamp > c.lastActive) c.lastActive = msg.timestamp;
     }
