@@ -14,6 +14,9 @@ import path from 'path';
 import crypto from 'crypto';
 
 export class DataBurner {
+  /** 覆写分块大小（1 MiB）：内存峰值与文件大小无关 */
+  static CHUNK_SIZE = 1024 * 1024;
+
   constructor() {
     this.destroyedFiles = [];
     this.errors = [];
@@ -33,14 +36,11 @@ export class DataBurner {
     const fileSize = stats.size;
 
     try {
-      // 第1轮：零填充
-      await this._overwrite(filePath, Buffer.alloc(fileSize, 0x00));
-
-      // 第2轮：随机填充
-      await this._overwrite(filePath, crypto.randomBytes(fileSize));
-
-      // 第3轮：零填充
-      await this._overwrite(filePath, Buffer.alloc(fileSize, 0x00));
+      // 三轮擦除：按固定分块写入，避免为整文件分配 Buffer
+      // （审计项：原来 Buffer.alloc(fileSize) + crypto.randomBytes(fileSize) 会让大文件占用数倍内存）
+      await this._overwrite(filePath, fileSize, 'zero');
+      await this._overwrite(filePath, fileSize, 'random');
+      await this._overwrite(filePath, fileSize, 'zero');
 
       // 删除文件
       fs.unlinkSync(filePath);
@@ -113,16 +113,29 @@ export class DataBurner {
   }
 
   /**
-   * 覆写文件内容
+   * 分块覆写文件内容。
+   *
+   * @param {string} filePath 目标文件
+   * @param {number} size     原始文件大小（保持不变，逐块覆盖同一段区域）
+   * @param {'zero'|'random'} fill 填充模式
+   *
+   * 每次只分配 CHUNK_SIZE，写完 sync() 再进入下一块——内存峰值与文件大小无关。
+   * 注意：这是 best-effort 擦除，SSD 磨损均衡、写时复制文件系统与快照仍可能留下旧副本。
    */
-  async _overwrite(filePath, buffer) {
-    return new Promise((resolve, reject) => {
-      const stream = fs.createWriteStream(filePath, { flags: 'w' });
-      stream.write(buffer);
-      stream.end();
-      stream.on('finish', resolve);
-      stream.on('error', reject);
-    });
+  async _overwrite(filePath, size, fill) {
+    const fh = await fs.promises.open(filePath, 'r+');
+    try {
+      let offset = 0;
+      while (offset < size) {
+        const len = Math.min(DataBurner.CHUNK_SIZE, size - offset);
+        const buf = fill === 'random' ? crypto.randomBytes(len) : Buffer.alloc(len, 0x00);
+        await fh.write(buf, 0, len, offset);
+        offset += len;
+      }
+      await fh.sync();
+    } finally {
+      await fh.close();
+    }
   }
 
   /**
@@ -141,7 +154,9 @@ export class DataBurner {
       },
       destroyedFiles: this.destroyedFiles,
       errors: this.errors,
-      verification: '所有文件已执行3轮擦除并删除。原始聊天记录数据已不可恢复。'
+      verification: '已对每个文件执行 3 轮覆写并删除（best-effort）。' +
+        '注意：SSD 磨损均衡、写时复制文件系统、快照与云备份仍可能保留旧副本，' +
+        '本报告只证明"执行了什么操作"，不证明"数据在物理上不可恢复"。'
     };
 
     return report;
