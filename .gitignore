@@ -58,3 +58,6 @@ data/unified/
 data/analysis/
 data/output/
 !data/README.md
+
+# 服务运行日志（valley / 自检）
+logs/
