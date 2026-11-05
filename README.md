@@ -29,8 +29,9 @@
 
 ### 核心特性
 
-- **多平台消息提取** — 微信（数据库直读解密）、QQ（OneBot API）、飞书（开放平台 API）、QQ空间（HTTP API），全部内置实现，不依赖外部 CLI 工具
+- **多平台消息提取** — 微信（数据库直读解密 / weflow-cli）、QQ（OneBot API / qce 导出）、飞书（lark-cli 用户身份）、QQ空间（qce qzone，回落内置 HTTP）、贴吧/知乎（浏览器抓页面）、B站（MCP 采集器）
 - **AI 纪念碑生成** — 基于 DeepSeek / Claude，四层分析架构：统计概览 → 年度抽样 → 人物画像 → 叙事体纪念碑文
+- **离线流程** — 没有 API Key 也能出真东西：导出 → 汇总 → 筛选 → 渲染，每步都有中间产物
 - **数据焚毁** — 分块多遍覆写 + 删除，生成可审计的操作报告（best-effort，非物理级不可恢复）
 - **名人数据集** — 内置李白、苏轼、张雪峰等多维度数据集，无需个人数据即可体验
 - **纪念碑谷平台** — Express + React + SQLite 全栈应用，可在线展示和分享纪念碑
@@ -387,7 +388,7 @@ Ember/
 │   ├── index.js              # CLI 主入口
 │   ├── adapters/             # 平台适配器（加载已导出 JSON）
 │   ├── core/
-│   │   ├── extractor.js      # 统一消息提取器（微信/QQ/飞书/QQ空间）
+│   │   ├── extractor.js      # 统一消息提取器（微信/QQ/飞书/QQ空间/贴吧/知乎/B站）
 │   │   ├── wechat-db.js      # 微信数据库解密读取（自包含）
 │   │   ├── parsers.js        # 共享消息解析器（类型映射/内容提取）
 │   │   ├── cli-bridge.js     # 调用 weflow-cli / qce 的桥接层（参数校验/产物定位）
@@ -400,6 +401,26 @@ Ember/
 │       ├── su-shi.js         # 苏轼
 │       ├── libai.js          # 李白
 │       └── zhangxuefeng.js   # 张雪峰
+├── scripts/                  # 不依赖 AI Key 的离线工具
+│   ├── build-from-data.mjs   # 扫 data/raw/ 汇总成 unified-data.json
+│   ├── select-personal.mjs   # 从全量语料里筛出「与本人相关」的部分
+│   ├── render.mjs            # analysis.json → monument.json / .html
+│   ├── dump-unified.mjs      # 按 config 在线提取一次（不走 data/ 目录）
+│   ├── health-check.ps1      # 数据源自检（OK/FAIL/SKIP 三态，-Fix 拉起服务）
+│   ├── run-health-check.cmd  # 自检入口（日志写 logs/）
+│   ├── start-valley.cmd      # 后台启动纪念碑谷
+│   └── lark-cli-user-token.js # 飞书令牌注入 wrapper
+├── data/                     # 个人数据目录（整个目录不入库）
+│   ├── raw/<source>/         # 原始导出：wechat / qq / qzone / feishu / tieba / zhihu / bilibili
+│   ├── unified/              # 汇总与筛选结果
+│   ├── analysis/             # analysis.json（AI 生成或人工撰写）
+│   ├── output/               # monument.json / monument.html
+│   └── README.md             # 目录约定（唯一入库的文件）
+├── docs/                     # 文档
+│   ├── 架构与数据流.md        # 分层、两条路径、每层代码在哪
+│   ├── schema.md             # 统一字段 + 各平台对照 + 已知的坑
+│   ├── 故障排查.md            # 症状 → 原因 → 命令
+│   └── feishu-cli-用户身份接入.md
 ├── valley/                   # 纪念碑谷平台
 │   ├── server/               # Express + SQLite 后端
 │   └── client/               # React 前端
@@ -409,6 +430,49 @@ Ember/
 ├── .env.example              # 环境变量模板
 └── package.json
 ```
+
+## 离线流程（无需任何 API Key）
+
+`generate` 在缺少 `DEEPSEEK_API_KEY` 时会产出**模拟分析**——能跑通，但不是真实内容。
+想在没有 Key 的情况下出真东西，走这条三步离线链：
+
+```bash
+# 1) 把 data/raw/ 下的导出汇总成统一语料（加 --live 顺带取飞书/贴吧/知乎）
+node scripts/build-from-data.mjs
+
+# 2) 只保留与本人相关的消息（规则见文件头注释；--dry 只打印统计不写文件）
+node scripts/select-personal.mjs --context-min 10
+
+# 3) 渲染：analysis.json 可以手写，也可以让 AI 在别处生成后拿回来
+node scripts/render.mjs data/analysis/analysis.json data/output
+```
+
+`analysis.json` 的字段与 AI 分析结果一致：
+
+```json
+{
+  "meta":  { "totalMessages": 0, "platforms": [] },
+  "epitaph": "碑文正文",
+  "trajectory":    [ { "year": 2020, "summary": "……" } ],
+  "relationships": [ { "name": "……", "role": "……", "intimacy": 0.9 } ],
+  "keywords":      [ { "year": 2020, "words": ["……"] } ],
+  "stats":         { "totalMessages": 0, "totalContacts": 0 }
+}
+```
+
+三步之间每份中间产物都落在 `data/` 下，可复现、可对比、可回滚。
+`data/` 整个目录在 `.gitignore` 里，个人数据不会进仓库。
+
+## 文档
+
+| 文档 | 内容 |
+|---|---|
+| [架构与数据流](docs/架构与数据流.md) | 五层结构、两条完整路径、每层代码在哪 |
+| [数据格式](docs/schema.md) | 统一 schema、各平台字段对照、已知的坑 |
+| [故障排查](docs/故障排查.md) | 按「症状 → 原因 → 命令」组织 |
+| [纪念碑谷 API](docs/valley-api.md) | 全部端点、鉴权方式、上传示例 |
+| [飞书 CLI 接入](docs/feishu-cli-用户身份接入.md) | 飞书用户身份与令牌的四个坑 |
+| [data/ 目录约定](data/README.md) | 导出数据怎么放、怎么汇总 |
 
 ## 数据隐私
 
