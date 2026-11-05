@@ -175,16 +175,16 @@ Ember 会调用 `weflow-cli export <talker> json --json --output <目录>` 并�
 **方式 A：交给 qce（qchat-cli）导出**（推荐，多账号时尤其方便）
 
 ```bash
-# 群聊
-node src/index.js generate --qq-export --qq-target 1109256353 --no-burn
+# 群聊（示例里的群号/QQ号都是占位，换成你自己的）
+node src/index.js generate --qq-export --qq-target 123456789 --no-burn
 
 # 多账号：指定账号 + 自己的 QQ 号（用于识别哪些消息是自己发的）
 node src/index.js generate --qq-export --qq-account acc2 \
-  --qq-target 1109256353 --qq-self 1245581875 --no-burn
+  --qq-target 123456789 --qq-self 987654321 --no-burn
 
 # 或者先导出成文件，再喂给 Ember
-qce --account acc2 export 1109256353 --format json -o ./out
-node src/index.js generate --qq ./out/group_1109256353_xxx.json --qq-self 1245581875 --no-burn
+qce --account acc2 export 123456789 --format json -o ./out
+node src/index.js generate --qq ./out/group_123456789_xxx.json --qq-self 987654321 --no-burn
 ```
 
 `--qq-account` 对应 `qce account list` 里的账号名；`--qq-self` 不给时会自动跑
