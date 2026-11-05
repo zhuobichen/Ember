@@ -101,7 +101,7 @@ PLATFORMS    = { WECHAT:'wechat', QQ:'qq', FEISHU:'feishu',
 
 | 标准字段 | 源字段 |
 |---|---|
-| `chatId` | `` `${session.type}_${session.id}` `` → 如 `group_1109256353` |
+| `chatId` | `` `${session.type}_${session.id}` `` → 如 `group_123456789` |
 | `chatName` | `session.name` |
 | `sender` | `sender.card` → `sender.name` → `sender.id` |
 | `timestamp` | `timestamp`（数字秒） |
