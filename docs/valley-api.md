@@ -39,7 +39,7 @@
 
 ### `GET /api/users/me` 🔒
 
-返回当前用户信息（不含密码哈希）。
+返回当前用户信息（不含密码哈希）：`alias`、`created_at`。
 
 ## 纪念碑
 
@@ -52,18 +52,43 @@
 | `page` | 1 | 页码 |
 | `limit` | 20 | 每页条数 |
 
-**响应**：
+**响应**（实测）：
 
 ```json
 {
-  "monuments": [ { "id": 7, "title": "…", "subtitle": "…", "created_at": "…" } ],
-  "pagination": { "page": 1, "limit": 20, "total": 5, "pages": 1 }
+  "monuments": [
+    { "id": 7, "title": "…", "subtitle": "…", "has_puzzle": 0, "views": 0, "created_at": "…" }
+  ],
+  "pagination": { "page": 1, "limit": 12, "total": 5, "pages": 1 }
 }
 ```
 
+> `limit` 默认是 **12**（不是 20）。列表用下划线命名（`has_puzzle` / `created_at`），
+> 详情接口用驼峰（`hasPuzzle` / `createdAt`）——这是现有实现的命名不一致，写客户端时注意。
+
 ### `GET /api/monuments/:id` （可选登录）
 
-返回单座纪念碑，含完整 `content`。带 token 时额外返回“是否本人创建 / 是否已点赞”等状态。
+返回单座纪念碑的完整内容。字段（实测）：
+
+```
+id, title, subtitle, content, htmlContent, hasPuzzle, isOwner, views, createdAt, updatedAt
+```
+
+- `content` 是解析后的对象（不是字符串），可直接用
+- `htmlContent` 是自包含的 HTML，可直接塞进 iframe 或下载
+- `isOwner` 需要带 token 才有意义
+
+| 参数 | 说明 |
+|---|---|
+| `answer` | 谜题答案。只有设置过 `puzzleQuestion` 的碑才需要 |
+
+**谜题锁的行为**（这是本接口唯一有分支的地方）：
+
+- 没设谜题，或请求者是作者 → 直接返回完整内容
+- 设了谜题但不是作者，且没给 `answer` → 返回 `{ id, title, subtitle, hasPuzzle: true, puzzleQuestion, locked: true, views, createdAt }`，**不含 `content` / `htmlContent`**
+- `answer` 答错 → `403 { "error": "答案错误", "locked": true }`
+
+谜题答案在库里是 bcrypt 哈希，不能反查。
 
 ### `GET /api/monuments/my/list` 🔒
 
@@ -79,6 +104,8 @@
 | 表单直传 | `application/json` 或表单 | `content`（JSON 字符串或对象）+ 同上 |
 
 **响应**：`{ "id": 7, "message": "纪念碑上传成功" }`
+
+既没有 `file` 也没有 `content` 时返回 `400`（实测）。
 
 > `monument.json` 就是 `scripts/render.mjs` 或 `generator.js` 的产物，直接传即可。
 > `puzzleQuestion` / `puzzleAnswer` 是可选的“谜题锁”：填了之后访客要先答对才能看到全文。
